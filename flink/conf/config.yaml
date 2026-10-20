@@ -1,0 +1,77 @@
+# Platform-wide Flink settings, shared by the local and cloud runtimes.
+# See docs/design.md §4.1.
+
+jobmanager:
+  bind-host: 0.0.0.0
+  rpc:
+    address: jobmanager
+    port: 6123
+  memory:
+    process:
+      size: 1024m
+  # Rescale running jobs via PUT /jobs/:jobid/resource-requirements.
+  scheduler: adaptive
+  execution:
+    failover-strategy: region
+
+taskmanager:
+  bind-host: 0.0.0.0
+  numberOfTaskSlots: 4
+  memory:
+    process:
+      size: 1728m
+    # Jobs use the heap (hashmap) state backend, so give memory to the heap
+    # rather than to managed memory.
+    managed:
+      fraction: 0.1
+
+rest:
+  address: jobmanager
+  bind-address: 0.0.0.0
+  port: 8081
+
+parallelism:
+  default: 1
+
+state:
+  backend:
+    type: hashmap
+
+# Short intervals and timeouts so failures show up in seconds, not minutes.
+execution:
+  checkpointing:
+    interval: 10s
+    timeout: 30s
+    min-pause: 2s
+    tolerable-failed-checkpoints: 2
+    num-retained: 3
+    # Retained checkpoints let a rollback restore the previous version.
+    externalized-checkpoint-retention: RETAIN_ON_CANCELLATION
+    dir: s3://flink/checkpoints
+    savepoint-dir: s3://flink/savepoints
+
+restart-strategy:
+  type: exponential-delay
+  exponential-delay:
+    initial-backoff: 1s
+    max-backoff: 10s
+    backoff-multiplier: 2.0
+    reset-backoff-threshold: 1min
+    jitter-factor: 0.1
+
+metrics:
+  reporter:
+    prom:
+      factory:
+        class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+      port: 9249
+
+s3:
+  path:
+    style:
+      access: true
+
+env:
+  java:
+    opts:
+      all: --add-exports=java.rmi/sun.rmi.registry=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.file=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.parser=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.tree=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED --add-exports=java.security.jgss/sun.security.krb5=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.net=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.text=ALL-UNNAMED --add-opens=java.base/java.time=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.util.concurrent=ALL-UNNAMED --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED --add-opens=java.base/java.util.concurrent.locks=ALL-UNNAMED

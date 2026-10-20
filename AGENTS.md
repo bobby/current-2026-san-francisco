@@ -4,18 +4,31 @@ This file provides guidance to AI coding agents when working with code in this r
 
 ## Project status
 
-This repo holds demo code for the Current 2026 San Francisco talk "From Alerts to Autonomy: Advancing the Maturity Curve with Agentic Managed Streaming Platforms". README.md has the abstract and an architecture summary. The full design, including decisions, failure-mode catalogue, scenario flows and milestones, is in `docs/design.md`; read it before making changes. No build system, source code or tests exist yet. Once they're added, put the real build, lint and test commands here. Don't make them up before then.
+This repo holds demo code for the Current 2026 San Francisco talk "From Alerts to Autonomy: Advancing the Maturity Curve with Agentic Managed Streaming Platforms". README.md has the abstract and an architecture summary. The full design, including decisions, failure-mode catalogue, scenario flows and milestones, is in `docs/design.md`; read it before making changes.
+
+## Commands
+
+The local platform runs under Docker Compose (`compose.yml`, project name `platform`):
+
+- `make up`: build the images and start the stack, waiting until every service is healthy.
+- `make smoke`: run the end-to-end smoke test (`scripts/smoke-test.sh`) against the running stack. Run it after any change to `compose.yml`, `flink/` or service config.
+- `make down` stops the stack and keeps the data. `make clean` also deletes the volumes.
+- `make ps` and `make logs` show status and logs.
+
+Local endpoints (all bound to 127.0.0.1): Flink UI/REST `:8081`, SQL Gateway `:8083`, Prometheus `:9090`, Kafka `:9094` (inside Compose, `kafka:9092`), Iceberg REST catalog `:8181`, RustFS S3 API `:9000` and console `:9001`, Postgres `:5432`.
+
+Settings that differ between runtimes, such as S3 endpoint and credentials, Flink memory and slots, and database passwords, come from environment variables with defaults in `compose.yml`; see `.env.example`. Platform-wide Flink behaviour, such as the scheduler, checkpointing, restart strategy and metrics, is in `flink/conf/config.yaml`. Flink logs go to stdout as JSON, formatted by `flink/conf/log-template.json`.
 
 ## Runtimes: local vs. cloud
 
 The same Docker Compose stack runs in two places. Keep both working:
 
-- **Local (development and fallback):** `compose.yml` on a MacBook Pro M3 with 18 GB. MinIO and an Iceberg REST catalog stand in for S3 and Glue. The simulated fleet is reduced and there's one TaskManager. Secrets come from a local, uncommitted `.env`.
+- **Local (development and fallback):** `compose.yml` on a MacBook Pro M3 with 18 GB. RustFS (S3-compatible) and an Iceberg REST catalog stand in for S3 and Glue. The simulated fleet is reduced and there's one TaskManager. Secrets come from a local, uncommitted `.env`.
 - **Cloud (live demo):** `compose.yml` + `compose.aws.yml` on one EC2 Graviton instance (`m7g.2xlarge`, 32 GB) in the `evidentsystems` AWS account (`AWS_PROFILE=evidentsystems`). It uses real S3 and the AWS Glue Data Catalog, images from ECR, and secrets from SSM Parameter Store. Access is through SSM Session Manager port forwarding only; the instance has no inbound ports.
 
 Rules for keeping them in step:
 
-- Anything that differs between the runtimes (catalog implementation, S3 vs. MinIO endpoints, memory limits, fleet size) belongs in config or the `compose.aws.yml` override. Never branch on the runtime in code.
+- Anything that differs between the runtimes (catalog implementation, S3 vs. RustFS endpoints, memory limits, fleet size) belongs in config or the `compose.aws.yml` override. Never branch on the runtime in code.
 - Both runtimes are arm64. Build images for arm64 only.
 - AWS infrastructure is plain CloudFormation YAML in `infra/cloudformation/`, not CDK. Don't create or modify AWS resources unless asked to. Check what already exists in the account first.
 

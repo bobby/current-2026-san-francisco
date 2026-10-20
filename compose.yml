@@ -1,0 +1,226 @@
+# Demo platform: the local runtime (docs/design.md §4, §11).
+#
+# Everything that differs between the local and cloud runtimes (S3 endpoint
+# and credentials, catalog, memory sizes, slots) is set here, so that
+# compose.aws.yml can override it. Platform-wide Flink behaviour lives in
+# flink/conf/config.yaml.
+#
+# Host ports bind to 127.0.0.1 only.
+
+name: platform
+
+x-flink: &flink
+  build: ./flink
+  image: platform/flink:2.1.2
+  environment: &flink-env
+    JOB_MANAGER_RPC_ADDRESS: jobmanager
+    FLINK_PROPERTIES: |
+      s3.endpoint: ${S3_ENDPOINT:-http://s3:9000}
+      s3.access-key: ${S3_ACCESS_KEY:-platform}
+      s3.secret-key: ${S3_SECRET_KEY:-platform-secret}
+      taskmanager.numberOfTaskSlots: ${FLINK_TM_SLOTS:-12}
+      taskmanager.memory.process.size: ${FLINK_TM_PROCESS_SIZE:-2816m}
+  depends_on:
+    bucket-init:
+      condition: service_completed_successfully
+
+services:
+  kafka:
+    image: apache/kafka:4.2.2
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:9094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_HEAP_OPTS: -Xms512m -Xmx512m
+      CLUSTER_ID: FGXsS8ccRdKsxtKmg0Y7uw
+    ports:
+      - 127.0.0.1:9094:9094
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    mem_limit: 1g
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-cluster.sh cluster-id --bootstrap-server localhost:9092 >/dev/null"]
+      interval: 15s
+      timeout: 15s
+      retries: 10
+      start_period: 20s
+
+  # S3-compatible object store standing in for S3 locally (RustFS; MinIO no
+  # longer publishes container images).
+  s3:
+    image: rustfs/rustfs:1.0.3
+    environment:
+      RUSTFS_ADDRESS: :9000
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_CONSOLE_ADDRESS: :9001
+      RUSTFS_ACCESS_KEY: ${S3_ACCESS_KEY:-platform}
+      RUSTFS_SECRET_KEY: ${S3_SECRET_KEY:-platform-secret}
+    ports:
+      - 127.0.0.1:9000:9000
+      - 127.0.0.1:9001:9001
+    volumes:
+      - s3-data:/data
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9000/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Creates the buckets for Flink state and the Iceberg warehouse.
+  bucket-init:
+    image: curlimages/curl:8.23.0
+    environment:
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-platform}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-platform-secret}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        for bucket in flink warehouse; do
+          code=$$(curl -s -o /dev/null -w '%{http_code}' -X PUT \
+            --aws-sigv4 "aws:amz:us-east-1:s3" --user "$$S3_ACCESS_KEY:$$S3_SECRET_KEY" \
+            "http://s3:9000/$$bucket")
+          case "$$code" in
+            200|409) echo "bucket $$bucket ready ($$code)" ;;
+            *) echo "creating bucket $$bucket failed: HTTP $$code"; exit 1 ;;
+          esac
+        done
+    depends_on:
+      s3:
+        condition: service_healthy
+
+  iceberg-rest:
+    image: apache/iceberg-rest-fixture:1.10.1
+    environment:
+      CATALOG_WAREHOUSE: s3://warehouse/
+      CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
+      CATALOG_S3_ENDPOINT: ${S3_ENDPOINT:-http://s3:9000}
+      CATALOG_S3_PATH__STYLE__ACCESS: "true"
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY:-platform}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:-platform-secret}
+      JAVA_TOOL_OPTIONS: -Xmx256m
+    ports:
+      - 127.0.0.1:8181:8181
+    volumes:
+      # The fixture keeps its catalog in SQLite under /tmp.
+      - iceberg-catalog:/tmp
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8181/v1/config"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    depends_on:
+      bucket-init:
+        condition: service_completed_successfully
+
+  jobmanager:
+    <<: *flink
+    command: jobmanager
+    environment:
+      <<: *flink-env
+      FLINK_COMPONENT: jobmanager
+    ports:
+      - 127.0.0.1:8081:8081
+    mem_limit: 1280m
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8081/overview"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
+  taskmanager:
+    <<: *flink
+    command: taskmanager
+    environment:
+      <<: *flink-env
+      FLINK_COMPONENT: taskmanager
+    mem_limit: 3g
+    depends_on:
+      jobmanager:
+        condition: service_healthy
+
+  sql-gateway:
+    <<: *flink
+    command:
+      - /opt/flink/bin/sql-gateway.sh
+      - start-foreground
+      - -Dsql-gateway.endpoint.rest.address=0.0.0.0
+      - -Dsql-gateway.endpoint.rest.bind-address=0.0.0.0
+      - -Dsql-gateway.endpoint.rest.port=8083
+      - -Dexecution.target=remote
+    environment:
+      <<: *flink-env
+      FLINK_COMPONENT: sql-gateway
+      JVM_ARGS: -Xmx384m
+    ports:
+      - 127.0.0.1:8083:8083
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8083/v1/info"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    depends_on:
+      jobmanager:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:18.6
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      OPS_DB_PASSWORD: ${OPS_DB_PASSWORD:-ops}
+      TICKETS_DB_PASSWORD: ${TICKETS_DB_PASSWORD:-tickets}
+      MATTERMOST_DB_PASSWORD: ${MATTERMOST_DB_PASSWORD:-mattermost}
+    ports:
+      - 127.0.0.1:5432:5432
+    volumes:
+      - postgres-data:/var/lib/postgresql
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  prometheus:
+    image: prom/prometheus:v3.13.4
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=2d
+      - --web.enable-lifecycle
+    ports:
+      - 127.0.0.1:9090:9090
+    volumes:
+      - ./observability/prometheus:/etc/prometheus:ro
+      - prometheus-data:/prometheus
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/healthy"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  kafka-data:
+  s3-data:
+  iceberg-catalog:
+  postgres-data:
+  prometheus-data:

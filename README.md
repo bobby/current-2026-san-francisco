@@ -20,7 +20,7 @@ The whole stack is defined once in Docker Compose and runs in two places:
 |---|---|---|
 | Host | MacBook Pro M3, 18 GB | One EC2 Graviton instance (`m7g.2xlarge`, 32 GB) in the `evidentsystems` AWS account |
 | Compose files | `compose.yml` | `compose.yml` + `compose.aws.yml` |
-| Iceberg warehouse, checkpoints, savepoints | MinIO + Iceberg REST catalog | Real S3 + AWS Glue Data Catalog |
+| Iceberg warehouse, checkpoints, savepoints | RustFS (S3-compatible) + Iceberg REST catalog | Real S3 + AWS Glue Data Catalog |
 | Images | Built locally (arm64) | The same arm64 images, pushed to ECR |
 | Secrets (Jev and Anthropic API keys, ShadowTraffic license) | Local `.env` (not committed) | SSM Parameter Store |
 | Access | `localhost` | SSM Session Manager port forwarding (no inbound ports) |
@@ -28,9 +28,21 @@ The whole stack is defined once in Docker Compose and runs in two places:
 
 AWS infrastructure is defined in CloudFormation (`infra/cloudformation/`). Both runtimes are arm64, so the images built on the laptop run unchanged on EC2.
 
+#### Running Locally
+
+You need Docker Desktop (or another Docker engine with Compose v2), `make`, `curl` and `jq`.
+
+```sh
+make up      # build and start the platform; waits until it's healthy (~20 s warm)
+make smoke   # end-to-end check: Flink job → S3 checkpoint → Prometheus, Iceberg, Kafka, Postgres
+make down    # stop (keep data); `make clean` also deletes volumes
+```
+
+Then open the Flink UI at http://localhost:8081, Prometheus at http://localhost:9090, and the RustFS console at http://localhost:9001. Copy `.env.example` to `.env` to override the defaults.
+
 ### A Real Flink Platform
 
-We run a real (small) managed-Flink platform: Kafka, a Flink session cluster, and Iceberg tables (on MinIO locally, on S3 with Glue in the cloud). A handful of real Flink jobs (a mix of Java DataStream and Flink SQL) read from Kafka and write to Iceberg. The jobs' business logic is deliberately incidental, since the talk is about operating many user-provided, opaque jobs, not about the jobs themselves.
+We run a real (small) managed-Flink platform: Kafka, a Flink session cluster, and Iceberg tables (on RustFS locally, on S3 with Glue in the cloud). A handful of real Flink jobs (a mix of Java DataStream and Flink SQL) read from Kafka and write to Iceberg. The jobs' business logic is deliberately incidental, since the talk is about operating many user-provided, opaque jobs, not about the jobs themselves.
 
 Real telemetry comes from Flink itself: metrics via the Prometheus reporter, logs, and checkpoint stats via the Flink REST API. Remediations (restart, rollback, rescale, stop-with-savepoint) call the real Flink REST API, so the audience can watch the telemetry recover.
 
