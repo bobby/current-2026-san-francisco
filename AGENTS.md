@@ -32,6 +32,11 @@ These are deliberate, so don't reverse them casually:
 - **Scenario 2 uses Claude Code over MCP.** It runs headless behind the Mattermost bot and talks to our Rust MCP server, built on `rmcp`. Claude can only propose mutating actions; a human approves them through Mattermost buttons.
 - **ChatOps and ticketing run in Compose:** Mattermost, and a mock ticketing service shaped like the ServiceNow Table API. The ticket UI is generic and not styled to look like ServiceNow.
 
+## Work tracking and pull requests
+
+- Work is tracked in GitHub Issues on `bobby/current-2026-san-francisco`, grouped into the "Platform foundation" and "Agentic scenarios" milestones. Issues #1–#12 correspond to the milestones in `docs/design.md` §12.
+- **Every pull request must fully auto-close at least one issue.** Put a closing keyword (`Closes #N`) in the PR description for each issue it completes. A PR that only partly finishes an issue isn't allowed. Split the issue first, so the PR can close a complete one.
+
 ## Tooling notes
 
 - The `shadowtraffic` skill covers writing and debugging ShadowTraffic configs.

@@ -420,6 +420,8 @@ On the laptop the fleet can be scaled down (e.g. about 200 simulated jobs) durin
 
 ## 12. Milestones
 
+Progress is tracked in [GitHub Issues](https://github.com/bobby/current-2026-san-francisco/issues) #1–#12, under the "Platform foundation" and "Agentic scenarios" GitHub milestones.
+
 1. **Platform skeleton (laptop):** Kafka, Flink, MinIO + REST catalog, Postgres, Prometheus. One SQL job and one Java job fed by `st-inputs`, writing to Iceberg.
 2. **AWS early:** the CloudFormation stack, ECR, the Compose override, S3 + Glue, SSM access. Proves the target environment before more is built on top.
 3. **Telemetry plane:** collector, Vector, fleet simulation + fleet-exporter, alert rules, the ops DB.
