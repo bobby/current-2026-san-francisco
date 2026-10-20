@@ -59,6 +59,15 @@ restart-strategy:
     reset-backoff-threshold: 1min
     jitter-factor: 0.1
 
+# Catalogs available to every SQL Gateway session and Table API job. The
+# `lake` Iceberg catalog is defined per runtime (REST catalog locally, Glue on
+# AWS) in a YAML file mounted into this directory.
+table:
+  catalog-store:
+    kind: file
+    file:
+      path: file:///opt/flink/catalogs
+
 metrics:
   reporter:
     prom:

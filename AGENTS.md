@@ -14,6 +14,21 @@ The local platform runs under Docker Compose (`compose.yml`, project name `platf
 - `make smoke`: run the end-to-end smoke test (`scripts/smoke-test.sh`) against the running stack. Run it after any change to `compose.yml`, `flink/` or service config.
 - `make down` stops the stack and keeps the data. `make clean` also deletes the volumes.
 - `make ps` and `make logs` show status and logs.
+- `make up` requires a ShadowTraffic license in `shadowtraffic/license.env` (git-ignored; see `shadowtraffic/license.env.example`). Never read, print or commit it.
+
+Jobs (`jobs/`; design doc §4.2):
+
+- `make jobs`: build the Java jobs jar (`jobs/java/target/platform-jobs.jar`) in a Maven container; no local JDK needed.
+- `scripts/jobs.sh submit <job> [flags]` deploys one job by hand, e.g. `scripts/jobs.sh submit payments-enrichment --fault=npe-on-null-field`. Also `submit-all`, `cancel <job>|all` and `list`, wrapped by `make jobs-submit`, `make jobs-cancel` and `make jobs-list`.
+- `make jobs-test` (`scripts/jobs-test.sh`): checks that every job commits to Iceberg and that every fault fails as designed. It produces its own fixture records and takes a few minutes. Run it after changing `jobs/` or the Flink image.
+
+How the jobs are built:
+
+- The Java jobs are one jar with `--job=<name>`, fault flags (`--fault=npe-on-null-field|state-leak`) and `--on-deser-error=fail|dlq`.
+- They reach Kafka and Iceberg **only through the Table API**, using the connectors on the cluster classpath (`flink/Dockerfile`). `flink-sql-connector-kafka` relocates Kafka's client classes, so don't add Kafka or Iceberg dependencies to the jar.
+- SQL jobs are `jobs/sql/<name>.sql`, submitted through the SQL Gateway.
+- Every job uses the `lake` Iceberg catalog, defined per runtime in `flink/catalogs/<runtime>/lake.yaml` and loaded through Flink's file catalog store.
+- `docs/flink-metrics.md` lists the real Flink metric names and labels that the simulated fleet must match.
 
 Local endpoints (all bound to 127.0.0.1): Flink UI/REST `:8081`, SQL Gateway `:8083`, Prometheus `:9090`, Kafka `:9094` (inside Compose, `kafka:9092`), Iceberg REST catalog `:8181`, RustFS S3 API `:9000` and console `:9001`, Postgres `:5432`.
 
