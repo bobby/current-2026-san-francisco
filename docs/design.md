@@ -43,7 +43,7 @@ The business logic of the Flink jobs doesn't matter. The talk is about operating
 | D8 | **Swappable Jev endpoint** (Jev or OpenJev/SemIf via `base_url`) | Not tied to one provider. Both share the `/v1/systemone` API |
 | D9 | **Mattermost in Compose** for ChatOps; **ServiceNow-shaped mock** for ticketing | Good visuals with nothing to procure; tickets appear as rich cards in chat |
 | D10 | **Demo runs on one EC2 instance** (Graviton) using the same Compose stack. The laptop is for development and is the fallback | Relieves the 18 GB laptop limit, and the arm64 images are shared with the M3 |
-| D11 | **Real S3 + AWS Glue Data Catalog** for Iceberg, checkpoints and savepoints on AWS. MinIO + Iceberg REST catalog locally | Believability; Glue is the simplest catalog |
+| D11 | **Real S3 + AWS Glue Data Catalog** for Iceberg, checkpoints and savepoints on AWS. RustFS (S3-compatible) + Iceberg REST catalog locally | Believability; Glue is the simplest catalog. MinIO no longer publishes container images, so the local store is RustFS |
 | D12 | **SSM Session Manager port forwarding** for access | No inbound ports, and only the AWS CLI is needed |
 | D13 | **CloudFormation (plain YAML)** for infrastructure | See §10.1 |
 | D15 | **Anthropic API** for Claude Code and **hosted Jev API**, with keys in SSM Parameter Store | Both keys are already available |
@@ -124,13 +124,13 @@ Kafka is the event bus for all telemetry. The Postgres ops DB is the queryable h
 
 ### 4.1 Flink
 
-- A **session cluster**: one JobManager, one or two TaskManagers, and the SQL Gateway. Flink version: the newest release that the Kafka connector and the Iceberg Flink runtime both support. Pin it during implementation.
+- A **session cluster**: one JobManager, one or two TaskManagers, and the SQL Gateway. Flink 2.1.2: the newest release that both the Kafka connector (`5.0.0-2.1`) and the Iceberg Flink runtime (`iceberg-flink-runtime-2.1:1.11.0`) support.
 - **Adaptive scheduler** enabled, so a rescale is a `PUT /jobs/:jobid/resource-requirements` call. TaskManagers keep spare slots so a rescale has room.
 - **Short checkpoint interval (about 10 s)** and short timeouts, so failures show up within seconds, not minutes.
 - **Retained checkpoints**, so a rollback can restore the previous version from the last good checkpoint.
 - **Prometheus reporter** on the JobManager and TaskManagers.
 - **Structured JSON logs** via the log4j2 `JsonTemplateLayout`, collected by Vector from container stdout.
-- **State and checkpoints** go to `s3://…/checkpoints` and `s3://…/savepoints` on AWS, and to MinIO locally, through the Flink S3 filesystem plugin.
+- **State and checkpoints** go to `s3://…/checkpoints` and `s3://…/savepoints` on AWS, and to RustFS locally, through the Flink S3 filesystem plugin.
 
 ### 4.2 Jobs
 
@@ -175,7 +175,7 @@ ShadowTraffic can also write Iceberg directly to Glue. We may use that to fill f
 ### 4.5 AWS deployment
 
 - **One EC2 instance**: `m7g.2xlarge` (8 vCPU, 32 GB, arm64), Amazon Linux 2023, Docker with the Compose plugin, and a 100 GB gp3 volume.
-- **Compose files**: `compose.yml` is the base, used on the laptop with MinIO and the Iceberg REST catalog. `compose.aws.yml` is an override that drops MinIO and the REST catalog, sets the Glue catalog and S3 paths, and raises memory limits.
+- **Compose files**: `compose.yml` is the base, used on the laptop with RustFS and the Iceberg REST catalog. `compose.aws.yml` is an override that drops RustFS and the REST catalog, sets the Glue catalog and S3 paths, and raises memory limits.
 - **Images**: custom images (the Rust services, the jobs jar, Flink with plugins) are built on the M3 for arm64 and pushed to **ECR**.
 - **Rollout**: a `make deploy-aws` target pushes images, uploads the Compose bundle to S3, and runs `docker compose pull && up -d` on the instance via **SSM Run Command**.
 - **Access**: SSM port forwarding for Mattermost, Grafana, the Flink UI and the tickets UI. The security group has **no inbound rules**.
@@ -353,7 +353,7 @@ A single dashboard: alerts in vs. signals out, and a per-job panel for the starr
 ## 10. Repository layout and tooling
 
 ```
-compose.yml                 # base (laptop: MinIO + Iceberg REST catalog)
+compose.yml                 # base (laptop: RustFS + Iceberg REST catalog)
 compose.aws.yml             # override (S3 + Glue, bigger heaps)
 Cargo.toml                  # Rust workspace
 crates/
@@ -413,7 +413,7 @@ These are estimates to check against real usage.
 | Vector | 0.1 GB | 0.1 GB |
 | Rust services + agents | 0.3 GB | 0.3 GB |
 | Claude Code (Node) | 0.5 GB | 0.5 GB |
-| MinIO + Iceberg REST catalog | 0.75 GB | — |
+| RustFS + Iceberg REST catalog | 0.75 GB | — |
 | **Total** | **≈ 11.5 GB** | **≈ 19 GB** of 32 GB |
 
 On the laptop the fleet can be scaled down (e.g. about 200 simulated jobs) during development.
@@ -422,7 +422,7 @@ On the laptop the fleet can be scaled down (e.g. about 200 simulated jobs) durin
 
 Progress is tracked in [GitHub Issues](https://github.com/bobby/current-2026-san-francisco/issues) #1–#12, under the "Platform foundation" and "Agentic scenarios" GitHub milestones.
 
-1. **Platform skeleton (laptop):** Kafka, Flink, MinIO + REST catalog, Postgres, Prometheus. One SQL job and one Java job fed by `st-inputs`, writing to Iceberg.
+1. **Platform skeleton (laptop):** Kafka, Flink, RustFS + REST catalog, Postgres, Prometheus. One SQL job and one Java job fed by `st-inputs`, writing to Iceberg.
 2. **AWS early:** the CloudFormation stack, ECR, the Compose override, S3 + Glue, SSM access. Proves the target environment before more is built on top.
 3. **Telemetry plane:** collector, Vector, fleet simulation + fleet-exporter, alert rules, the ops DB.
 4. **Deploys and faults:** cicd-sim, the version catalogue, fault flags, fault injectors, the director.

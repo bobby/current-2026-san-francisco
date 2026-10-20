@@ -1,0 +1,17 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # Flink JobManager and TaskManagers via the Prometheus reporter. DNS
+  # discovery picks up every TaskManager replica.
+  - job_name: flink
+    dns_sd_configs:
+      - names: [jobmanager, taskmanager]
+        type: A
+        port: 9249
+        refresh_interval: 15s
