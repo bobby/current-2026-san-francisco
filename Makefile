@@ -1,4 +1,5 @@
-.PHONY: up down clean ps logs smoke jobs jobs-submit jobs-cancel jobs-list jobs-test license
+.PHONY: up down clean ps logs smoke jobs jobs-submit jobs-cancel jobs-list jobs-test license \
+	stack-aws secrets-aws deploy-aws jobs-submit-aws ps-aws tunnel teardown-aws
 
 MAVEN_IMAGE := maven:3.9.16-eclipse-temurin-17
 
@@ -49,3 +50,35 @@ license:
 	@test -f shadowtraffic/license.env || { \
 		echo "shadowtraffic/license.env is missing: copy shadowtraffic/license.env.example and fill in your ShadowTraffic license."; \
 		exit 1; }
+
+# The cloud runtime (issue #3; docs/design.md §4.5), in the evidentsystems AWS
+# account. See scripts/aws.sh for the other subcommands (exec, shell, stop,
+# start).
+
+# Create or update the CloudFormation stack (VPC, instance, bucket, Glue, ECR).
+stack-aws:
+	./scripts/aws.sh stack
+
+# Copy the ShadowTraffic license and any API keys in .env to SSM Parameter Store.
+secrets-aws: license
+	./scripts/aws.sh secrets
+
+# Push the Flink image to ECR, upload the Compose bundle and start it.
+deploy-aws: jobs
+	./scripts/aws.sh deploy
+
+# Submit every job, healthy, on the instance.
+jobs-submit-aws:
+	./scripts/aws.sh jobs submit-all
+
+ps-aws:
+	./scripts/aws.sh exec docker compose ps -a
+
+# Forward the Flink UI, SQL Gateway and Prometheus to localhost. Stop the
+# local stack first, since it uses the same ports.
+tunnel:
+	./scripts/aws.sh tunnel
+
+# Delete the stack, the bucket's contents, the images and the secrets.
+teardown-aws:
+	./scripts/aws.sh teardown

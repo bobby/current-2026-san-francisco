@@ -32,6 +32,13 @@ How the jobs are built:
 
 Local endpoints (all bound to 127.0.0.1): Flink UI/REST `:8081`, SQL Gateway `:8083`, Prometheus `:9090`, Kafka `:9094` (inside Compose, `kafka:9092`), Iceberg REST catalog `:8181`, RustFS S3 API `:9000` and console `:9001`, Postgres `:5432`.
 
+Cloud runtime (`scripts/aws.sh`; design doc §4.5). These create, change or delete AWS resources, so run them only when asked:
+
+- `make stack-aws` creates or updates the `current2026-demo` CloudFormation stack (`infra/cloudformation/demo.yaml`). `make secrets-aws` copies the ShadowTraffic license and any API keys in `.env` to SSM Parameter Store.
+- `make deploy-aws` pushes the Flink image to ECR, uploads the Compose bundle to S3 and starts it on the instance over SSM Run Command. `make jobs-submit-aws` submits the jobs there.
+- `scripts/aws.sh exec <command>` runs a shell command in `/opt/platform` on the instance. `make ps-aws` shows container status.
+- `make tunnel` forwards the UIs to localhost. `make teardown-aws` deletes the stack, the bucket's contents and the secrets.
+
 Settings that differ between runtimes, such as S3 endpoint and credentials, Flink memory and slots, and database passwords, come from environment variables with defaults in `compose.yml`; see `.env.example`. Platform-wide Flink behaviour, such as the scheduler, checkpointing, restart strategy and metrics, is in `flink/conf/config.yaml`. Flink logs go to stdout as JSON, formatted by `flink/conf/log-template.json`.
 
 ## Runtimes: local vs. cloud

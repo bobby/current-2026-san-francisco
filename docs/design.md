@@ -185,20 +185,29 @@ ShadowTraffic can also write Iceberg directly to Glue. We may use that to fill f
 
 ### 4.5 AWS deployment
 
-- **One EC2 instance**: `m7g.2xlarge` (8 vCPU, 32 GB, arm64), Amazon Linux 2023, Docker with the Compose plugin, and a 100 GB gp3 volume.
-- **Compose files**: `compose.yml` is the base, used on the laptop with RustFS and the Iceberg REST catalog. `compose.aws.yml` is an override that drops RustFS and the REST catalog, sets the Glue catalog and S3 paths, and raises memory limits.
-- **Images**: custom images (the Rust services, the jobs jar, Flink with plugins) are built on the M3 for arm64 and pushed to **ECR**.
-- **Rollout**: a `make deploy-aws` target pushes images, uploads the Compose bundle to S3, and runs `docker compose pull && up -d` on the instance via **SSM Run Command**.
-- **Access**: SSM port forwarding for Mattermost, Grafana, the Flink UI and the tickets UI. The security group has **no inbound rules**.
-- **Secrets** (Jev API key, ShadowTraffic license, Anthropic API key, Mattermost bot token) live in **SSM Parameter Store SecureStrings**. The instance role reads them at start-up.
-- **CloudFormation** (`infra/cloudformation/demo.yaml`) creates:
+- **One EC2 instance**: `m7g.2xlarge` (8 vCPU, 32 GB, arm64), Amazon Linux 2023, Docker with the Compose plugin, and a 100 GB gp3 volume. IMDSv2 has a hop limit of 2, so containers use the instance role.
+- **Compose files**: `compose.yml` is the base, used on the laptop with RustFS and the Iceberg REST catalog. `compose.aws.yml` is an override that:
+  - disables RustFS, `bucket-init` and the REST catalog (they move to a `local-storage` profile);
+  - mounts `flink/catalogs/aws/lake.yaml` (the Iceberg Glue catalog), and points checkpoints and savepoints at the bucket;
+  - drops the static S3 credentials, so S3 and Glue use the instance role;
+  - runs two TaskManagers and raises memory limits to the EC2 column of §11.
+- **Images**: custom images (the Rust services, Flink with plugins) are built on the M3 for arm64 and pushed to **ECR**. Public images are pulled from Docker Hub.
+- **Rollout**: `make deploy-aws` builds the jobs jar and pushes the images. It then uploads the Compose bundle (Compose files, configs, scripts, SQL jobs and the jar) to S3. Finally it uses **SSM Run Command** to unpack the bundle in `/opt/platform`, write `.env`, and run `docker compose pull && up -d --wait`. `make jobs-submit-aws` and `scripts/aws.sh jobs|exec` run `scripts/jobs.sh` or any command on the instance the same way, so no tunnel is needed to deploy jobs.
+- **Access**: `make tunnel` sets up SSM port forwarding for the Flink UI, SQL Gateway and Prometheus, plus Mattermost, Grafana and the tickets UI as they land. The security group has **no inbound rules**.
+- **Secrets** live in **SSM Parameter Store SecureStrings**. CloudFormation can't create SecureStrings, so `make secrets-aws` copies them from the laptop:
+  - the ShadowTraffic license goes to `/<stack>/shadowtraffic/license.env`;
+  - the Jev and Anthropic API keys and the Mattermost bot token go to `/<stack>/env/<NAME>`, taken from the local `.env`.
+
+  At deploy time the instance role reads them into the instance's `shadowtraffic/license.env` and `.env`.
+- **CloudFormation** (`infra/cloudformation/demo.yaml`, default stack name `current2026-demo`) creates:
   - a small VPC with a public subnet and an egress-only security group;
-  - the instance and its instance profile (SSM core, plus scoped S3, Glue and ECR permissions);
+  - the instance and its instance profile (SSM core, plus scoped S3, Glue, ECR and Parameter Store permissions);
   - an S3 bucket for the warehouse, checkpoints, savepoints and bundles;
-  - a Glue database per tenant (or a single database with a tenant prefix);
+  - a Glue database per tenant namespace. Each has an S3 location, so the Glue catalog needs no warehouse path;
   - ECR repositories.
 
-  It is deployed with `aws cloudformation deploy --profile evidentsystems`.
+  It is deployed with `aws cloudformation deploy --profile evidentsystems`, wrapped by `make stack-aws`.
+- **Teardown**: `make teardown-aws` empties the bucket, deletes the stack (the ECR repositories are emptied on delete; the Glue databases drop their tables) and deletes the secrets. `scripts/aws.sh stop|start` stops the instance between rehearsals and keeps its data.
 
 ## 5. Telemetry plane
 

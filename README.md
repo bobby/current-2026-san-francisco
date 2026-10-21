@@ -51,6 +51,21 @@ scripts/jobs.sh cancel positions-aggregator
 
 Then open the Flink UI at http://localhost:8081, Prometheus at http://localhost:9090, and the RustFS console at http://localhost:9001. Copy `.env.example` to `.env` to override the defaults.
 
+#### Running on AWS
+
+You also need the AWS CLI with the `evidentsystems` profile and the [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html) (`brew install --cask session-manager-plugin`), which `make tunnel` uses.
+
+```sh
+make stack-aws        # create or update the CloudFormation stack (~5 min the first time)
+make secrets-aws      # copy the ShadowTraffic license (and any API keys in .env) to SSM Parameter Store
+make deploy-aws       # push the Flink image to ECR, upload the Compose bundle and start the stack
+make jobs-submit-aws  # submit every job on the instance
+make tunnel           # forward the Flink UI (:8081), SQL Gateway (:8083) and Prometheus (:9090)
+make teardown-aws     # delete everything: stack, bucket contents, images, secrets
+```
+
+`scripts/aws.sh` has more subcommands: `exec <command>` and `jobs <args>` run on the instance over SSM Run Command, `shell` opens a session, and `stop`/`start` park the instance between rehearsals. Stop the local stack before `make tunnel`, because both use the same ports.
+
 ### A Real Flink Platform
 
 We run a real (small) managed-Flink platform: Kafka, a Flink session cluster, and Iceberg tables (on RustFS locally, on S3 with Glue in the cloud). A handful of real Flink jobs (a mix of Java DataStream and Flink SQL) read from Kafka and write to Iceberg. The jobs' business logic is deliberately incidental, since the talk is about operating many user-provided, opaque jobs, not about the jobs themselves.
