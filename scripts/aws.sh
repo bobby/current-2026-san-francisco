@@ -39,7 +39,7 @@ BUNDLE=(
   flink/catalogs/aws
   jobs/sql jobs/java/target/platform-jobs.jar jobs/versions.yaml
   observability postgres
-  shadowtraffic/inputs.json
+  shadowtraffic/inputs.json shadowtraffic/fleet.json shadowtraffic/fleet/roster-cloud.json
   scripts
 )
 

@@ -1,0 +1,17 @@
+# Sends every alert, firing and resolved, to the collector, which publishes
+# them to platform.alerts (docs/design.md §5.3). Grouping is per alert and
+# job, as a naive setup would have it; Scenario 1's triage does the real
+# grouping.
+route:
+  receiver: collector
+  group_by: [alertname, job_name]
+  group_wait: 10s
+  group_interval: 30s
+  repeat_interval: 4h
+
+receivers:
+  - name: collector
+    webhook_configs:
+      - url: http://collector:8090/alertmanager
+        send_resolved: true
+        max_alerts: 0

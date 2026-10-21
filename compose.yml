@@ -90,7 +90,7 @@ services:
           echo "topic $$1 ready"
         }
         create platform.jobs --config cleanup.policy=compact &
-        create platform.metrics --config retention.ms=3600000 &
+        create fleet.telemetry --config retention.ms=3600000 &
         create platform.logs --config retention.ms=86400000 &
         for topic in deployments job-status checkpoints alerts signals actions; do
           create "platform.$$topic" &
@@ -246,6 +246,27 @@ services:
       kafka:
         condition: service_healthy
 
+  # The simulated fleet (docs/design.md §4.4): one seeded state machine per
+  # job, from shadowtraffic/fleet/generate.py. The roster differs per
+  # runtime: about 200 jobs here, about 1,000 on AWS.
+  st-fleet:
+    image: shadowtraffic/shadowtraffic:2.3.1
+    command: ["--config", "/config/fleet.json", "--seed", "${ST_FLEET_SEED:-20261021}"]
+    env_file:
+      - path: shadowtraffic/license.env
+        required: false
+    environment:
+      JAVA_TOOL_OPTIONS: -Xmx768m
+    volumes:
+      - ./shadowtraffic:/config:ro
+      - ./shadowtraffic/fleet/roster-local.json:/fleet/roster.json:ro
+    mem_limit: 1g
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      fleet-exporter:
+        condition: service_healthy
+
   postgres:
     image: postgres:18.6
     environment:
@@ -346,6 +367,45 @@ services:
       collector:
         condition: service_healthy
       sql-gateway:
+        condition: service_healthy
+
+  # Relays the simulated fleet: fleet.telemetry → platform.* events, and
+  # Prometheus metrics that match real Flink jobs (docs/design.md §5.2).
+  # Prometheus scrapes it on :9249 as part of the `flink` job.
+  fleet-exporter:
+    <<: *services
+    command: [fleet-exporter]
+    ports:
+      - 127.0.0.1:9249:9249
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9249/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+
+  # Routes alerts from the naive rules (observability/prometheus/rules) to
+  # the collector, which publishes them to platform.alerts.
+  alertmanager:
+    image: prom/alertmanager:v0.34.1
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    ports:
+      - 127.0.0.1:9093:9093
+    volumes:
+      - ./observability/alertmanager:/etc/alertmanager:ro
+    mem_limit: 128m
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9093/-/healthy"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    depends_on:
+      collector:
         condition: service_healthy
 
   # Ships the Flink containers' logs to the collector.

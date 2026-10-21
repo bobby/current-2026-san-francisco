@@ -69,14 +69,14 @@ curl -sf "$COLLECTOR/health" >/dev/null || fail "the collector isn't reachable; 
 [[ -f jobs/java/target/platform-jobs.jar ]] || fail "jar not built; run 'make jobs'"
 
 step "Topics"
-for topic in jobs deployments job-status checkpoints logs metrics alerts signals actions; do
+for topic in platform.{jobs,deployments,job-status,checkpoints,logs,alerts,signals,actions} fleet.telemetry; do
   docker compose exec -T kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 \
-    --describe --topic "platform.$topic" >/dev/null 2>&1 || fail "platform.$topic is missing"
+    --describe --topic "$topic" >/dev/null 2>&1 || fail "$topic is missing"
 done
 jobs_topic=$(docker compose exec -T kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 \
   --describe --topic platform.jobs 2>/dev/null)
 grep -q cleanup.policy=compact <<<"$jobs_topic" || fail "platform.jobs isn't compacted"
-pass "all nine platform.* topics exist; platform.jobs is compacted"
+pass "all eight platform.* topics and fleet.telemetry exist; platform.jobs is compacted"
 
 step "A healthy job: status and checkpoints"
 audit=$(deploy audit-log-archiver)
