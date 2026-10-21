@@ -33,14 +33,14 @@ LICENSE_FILE=shadowtraffic/license.env
 # Ports forwarded by `tunnel`. Add Grafana, Mattermost and the tickets UI as
 # they land.
 TUNNEL_PORTS=(8081 8083 9090)
-# Files the instance needs to run the stack and the jobs.
+# Files the instance needs to run the stack, the jobs and the tests.
 BUNDLE=(
   compose.yml compose.aws.yml
   flink/catalogs/aws
   jobs/sql jobs/java/target/platform-jobs.jar jobs/versions.yaml
   observability postgres
-  shadowtraffic/inputs.json
-  scripts
+  shadowtraffic/inputs.json shadowtraffic/fleet.json shadowtraffic/fleet/roster-cloud.json
+  scripts docs/flink-metrics.md
 )
 
 die() { echo "error: $*" >&2; exit 1; }
@@ -124,12 +124,17 @@ secrets() {
 }
 
 # push_image <local image> <repository URI>: tags and pushes a local image,
-# keeping its tag, and prints the pushed name.
+# keeping its tag, and prints the pushed name. It runs in a command
+# substitution, where `set -e` doesn't apply, so failures return explicitly.
+# ECR occasionally rejects a layer part mid-upload, so it tries three times.
 push_image() {
-  local image=$2:${1##*:}
-  docker tag "$1" "$image"
-  docker push --quiet "$image" >/dev/null
-  echo "$image"
+  local image=$2:${1##*:} attempt
+  docker tag "$1" "$image" || return 1
+  for attempt in 1 2 3; do
+    docker push --quiet "$image" >/dev/null && { echo "$image"; return; }
+    echo "push of $image failed (attempt $attempt)" >&2
+  done
+  return 1
 }
 
 deploy() {
@@ -146,7 +151,7 @@ deploy() {
 
   log "Uploading the Compose bundle"
   key=bundles/$(date -u +%Y%m%dT%H%M%SZ).tgz
-  COPYFILE_DISABLE=1 tar czf - "${BUNDLE[@]}" | aws s3 cp --quiet - "s3://$bucket/$key"
+  COPYFILE_DISABLE=1 tar --no-xattrs -czf - "${BUNDLE[@]}" | aws s3 cp --quiet - "s3://$bucket/$key"
 
   log "Starting the stack on $(instance_id)"
   wait_for_ssm "$(instance_id)"

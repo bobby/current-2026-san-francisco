@@ -18,6 +18,8 @@
 //!   collector re-reads Flink's REST API after a restart) derive it from the
 //!   event's natural key with [`event_id`], so the ops DB stores it once.
 
+pub mod fleet;
+
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
@@ -34,7 +36,6 @@ pub mod topics {
     pub const JOB_STATUS: &str = "platform.job-status";
     pub const CHECKPOINTS: &str = "platform.checkpoints";
     pub const LOGS: &str = "platform.logs";
-    pub const METRICS: &str = "platform.metrics";
     pub const ALERTS: &str = "platform.alerts";
     pub const SIGNALS: &str = "platform.signals";
     pub const ACTIONS: &str = "platform.actions";
@@ -279,19 +280,6 @@ impl LogLevel {
     }
 }
 
-/// `platform.metrics`: one simulated metric sample. Real metrics are scraped
-/// straight from Flink by Prometheus; the fleet-exporter serves these with
-/// the same names and labels (docs/flink-metrics.md).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct MetricSample {
-    pub ts: Timestamp,
-    /// A Flink metric name, e.g. `flink_jobmanager_job_numRestarts`.
-    pub name: String,
-    pub value: f64,
-    /// Prometheus labels, with values rewritten as Flink's reporter does.
-    pub labels: BTreeMap<String, String>,
-}
-
 /// `platform.alerts`: an alert firing or resolving, from Alertmanager.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AlertEvent {
@@ -412,7 +400,8 @@ pub enum ActionPhase {
     Verified,
 }
 
-/// The JSON Schema for each topic's events, as `(topic, schema)`.
+/// The JSON Schema for each topic's events, as `(topic, schema)`. Includes
+/// the simulated fleet's internal `fleet.telemetry` topic.
 pub fn schemas() -> Vec<(&'static str, schemars::Schema)> {
     use schemars::schema_for;
     vec![
@@ -421,7 +410,7 @@ pub fn schemas() -> Vec<(&'static str, schemars::Schema)> {
         (topics::JOB_STATUS, schema_for!(JobStatusEvent)),
         (topics::CHECKPOINTS, schema_for!(CheckpointEvent)),
         (topics::LOGS, schema_for!(LogEvent)),
-        (topics::METRICS, schema_for!(MetricSample)),
+        (fleet::TOPIC, schema_for!(fleet::FleetEvent)),
         (topics::ALERTS, schema_for!(AlertEvent)),
         (topics::SIGNALS, schema_for!(Signal)),
         (topics::ACTIONS, schema_for!(ActionEvent)),

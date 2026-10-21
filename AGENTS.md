@@ -44,7 +44,14 @@ Telemetry plane and Rust code (design doc §5, §10):
 - After changing a type in `platform-model`, regenerate the JSON Schemas with `UPDATE_SCHEMAS=1 cargo test -p platform-model`; a test fails while they're stale. Schema changes are breaking for ShadowTraffic's fleet configs, so update those too.
 - Ops DB schema changes are new files in `crates/platform-clients/migrations/`; never edit an applied migration.
 
-Local endpoints (all bound to 127.0.0.1): Flink UI/REST `:8081`, SQL Gateway `:8083`, Prometheus `:9090`, Kafka `:9094` (inside Compose, `kafka:9092`), Iceberg REST catalog `:8181`, RustFS S3 API `:9000` and console `:9001`, Postgres `:5432`, collector `:8090`, cicd-sim `:8091`.
+The simulated fleet and alerting (design doc §4.4, §5.2, §5.3):
+
+- `st-fleet` runs `shadowtraffic/fleet.json`. **Don't edit it or the rosters by hand:** change `shadowtraffic/fleet/generate.py` and rerun it. The local runtime mounts the 200-job `roster-local.json`; the AWS override mounts the 1,000-job `roster-cloud.json`.
+- The fleet-exporter turns `fleet.telemetry` into `platform.*` events and serves Flink-identical metrics on `:9249`. Simulated series must keep the exact names and label sets of real ones (`docs/flink-metrics.md`), with no extra labels.
+- Alert rules live in `observability/prometheus/rules/` and are deliberately naive; Alertmanager's config is in `observability/alertmanager/`. `make up` reloads both configs.
+- `make fleet-test` (`scripts/fleet-test.sh`) checks fleet events, metric label parity with real jobs, and the alert stream. It waits up to 15 minutes for alerts to build up.
+
+Local endpoints (all bound to 127.0.0.1): Flink UI/REST `:8081`, SQL Gateway `:8083`, Prometheus `:9090`, Kafka `:9094` (inside Compose, `kafka:9092`), Iceberg REST catalog `:8181`, RustFS S3 API `:9000` and console `:9001`, Postgres `:5432`, collector `:8090`, cicd-sim `:8091`, fleet-exporter `:9249`, Alertmanager `:9093`.
 
 Cloud runtime (`scripts/aws.sh`; design doc §4.5). These create, change or delete AWS resources, so run them only when asked:
 

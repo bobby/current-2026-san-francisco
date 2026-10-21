@@ -1,0 +1,1434 @@
+{
+  "generators": [
+    {
+      "name": "fleet",
+      "topic": "fleet.telemetry",
+      "fork": {
+        "key": {
+          "_gen": "loadJsonFile",
+          "file": "/fleet/roster.json"
+        },
+        "stagger": {
+          "ms": 25
+        }
+      },
+      "key": {
+        "_gen": "var",
+        "var": "forkKey",
+        "path": [
+          "job_name"
+        ]
+      },
+      "value": {},
+      "stateMachine": {
+        "_gen": "stateMachine",
+        "initial": "running",
+        "transitions": {
+          "running": {
+            "_gen": "weightedOneOf",
+            "choices": [
+              {
+                "value": "running",
+                "weight": {
+                  "_gen": "var",
+                  "var": "forkKey",
+                  "path": [
+                    "w_metrics"
+                  ]
+                }
+              },
+              {
+                "value": "checkpoint",
+                "weight": {
+                  "_gen": "var",
+                  "var": "forkKey",
+                  "path": [
+                    "w_ckpt"
+                  ]
+                }
+              },
+              {
+                "value": "checkpoint_slow",
+                "weight": {
+                  "_gen": "var",
+                  "var": "forkKey",
+                  "path": [
+                    "w_ckpt_slow"
+                  ]
+                }
+              },
+              {
+                "value": "checkpoint_expired",
+                "weight": {
+                  "_gen": "var",
+                  "var": "forkKey",
+                  "path": [
+                    "w_ckpt_fail"
+                  ]
+                }
+              },
+              {
+                "value": "chatter",
+                "weight": {
+                  "_gen": "var",
+                  "var": "forkKey",
+                  "path": [
+                    "w_chatter"
+                  ]
+                }
+              },
+              {
+                "value": "deploy",
+                "weight": {
+                  "_gen": "var",
+                  "var": "forkKey",
+                  "path": [
+                    "w_deploy"
+                  ]
+                }
+              },
+              {
+                "value": "tm_lost",
+                "weight": {
+                  "_gen": "var",
+                  "var": "forkKey",
+                  "path": [
+                    "w_tm_lost"
+                  ]
+                }
+              },
+              {
+                "value": "peak",
+                "weight": {
+                  "_gen": "var",
+                  "var": "forkKey",
+                  "path": [
+                    "w_peak"
+                  ]
+                }
+              },
+              {
+                "value": "flap",
+                "weight": {
+                  "_gen": "var",
+                  "var": "forkKey",
+                  "path": [
+                    "w_flap"
+                  ]
+                }
+              },
+              {
+                "value": "crash",
+                "weight": {
+                  "_gen": "var",
+                  "var": "forkKey",
+                  "path": [
+                    "w_crash"
+                  ]
+                }
+              },
+              {
+                "value": "stalled",
+                "weight": {
+                  "_gen": "var",
+                  "var": "forkKey",
+                  "path": [
+                    "w_stall"
+                  ]
+                }
+              },
+              {
+                "value": "growing_start",
+                "weight": {
+                  "_gen": "var",
+                  "var": "forkKey",
+                  "path": [
+                    "w_grow"
+                  ]
+                }
+              }
+            ]
+          },
+          "checkpoint": "running",
+          "checkpoint_slow": "running",
+          "checkpoint_expired": "running",
+          "chatter": "running",
+          "deploy": {
+            "_gen": "weightedOneOf",
+            "choices": [
+              {
+                "value": "post_deploy_failure",
+                "weight": 1
+              },
+              {
+                "value": "running",
+                "weight": 1
+              }
+            ]
+          },
+          "post_deploy_failure": "recovered",
+          "tm_lost": "tm_lost_checkpoint",
+          "tm_lost_checkpoint": "recovered",
+          "flap": "recovered",
+          "recovered": "running",
+          "peak": {
+            "_gen": "weightedOneOf",
+            "choices": [
+              {
+                "value": "peak",
+                "weight": 90
+              },
+              {
+                "value": "running",
+                "weight": 10
+              }
+            ]
+          },
+          "crash": "crash_restarted",
+          "crash_restarted": "crash_running",
+          "crash_running": "crash",
+          "stalled": "stalled",
+          "growing_start": "growing",
+          "growing": "growing"
+        },
+        "states": {
+          "running": {
+            "value": {
+              "_gen": "merge",
+              "objects": [
+                {
+                  "_gen": "var",
+                  "var": "forkKey",
+                  "selectKeys": [
+                    "job_name",
+                    "tenant",
+                    "owner",
+                    "tier",
+                    "kind",
+                    "max_parallelism",
+                    "parallelism",
+                    "cluster",
+                    "input_topic",
+                    "sink_table",
+                    "first_deployed_at",
+                    "version",
+                    "author",
+                    "base_rate",
+                    "heap_max_bytes"
+                  ]
+                },
+                {
+                  "event": "metrics",
+                  "records_in_per_sec": {
+                    "_gen": "math",
+                    "expr": "x * f",
+                    "names": {
+                      "x": {
+                        "_gen": "var",
+                        "var": "forkKey",
+                        "path": [
+                          "base_rate"
+                        ]
+                      },
+                      "f": {
+                        "_gen": "uniformDistribution",
+                        "bounds": [
+                          0.9,
+                          1.1
+                        ]
+                      }
+                    },
+                    "decimals": 1
+                  },
+                  "busy_ms_per_sec": {
+                    "_gen": "math",
+                    "expr": "x * f",
+                    "names": {
+                      "x": {
+                        "_gen": "var",
+                        "var": "forkKey",
+                        "path": [
+                          "busy_ms"
+                        ]
+                      },
+                      "f": {
+                        "_gen": "uniformDistribution",
+                        "bounds": [
+                          0.85,
+                          1.15
+                        ]
+                      }
+                    },
+                    "decimals": 1
+                  },
+                  "backpressured_ms_per_sec": {
+                    "_gen": "uniformDistribution",
+                    "bounds": [
+                      0,
+                      25
+                    ],
+                    "decimals": 0
+                  },
+                  "pending_records": {
+                    "_gen": "math",
+                    "expr": "x * f",
+                    "names": {
+                      "x": {
+                        "_gen": "var",
+                        "var": "forkKey",
+                        "path": [
+                          "base_lag"
+                        ]
+                      },
+                      "f": {
+                        "_gen": "uniformDistribution",
+                        "bounds": [
+                          0.5,
+                          1.5
+                        ]
+                      }
+                    },
+                    "decimals": 0
+                  },
+                  "heap_used_ratio": {
+                    "_gen": "math",
+                    "expr": "x * f",
+                    "names": {
+                      "x": {
+                        "_gen": "var",
+                        "var": "forkKey",
+                        "path": [
+                          "heap_ratio"
+                        ]
+                      },
+                      "f": {
+                        "_gen": "uniformDistribution",
+                        "bounds": [
+                          0.92,
+                          1.08
+                        ]
+                      }
+                    },
+                    "decimals": 3
+                  }
+                }
+              ]
+            }
+          },
+          "checkpoint": {
+            "value": {
+              "_gen": "merge",
+              "objects": [
+                {
+                  "_gen": "var",
+                  "var": "forkKey",
+                  "selectKeys": [
+                    "job_name",
+                    "tenant",
+                    "owner",
+                    "tier",
+                    "kind",
+                    "max_parallelism",
+                    "parallelism",
+                    "cluster",
+                    "input_topic",
+                    "sink_table",
+                    "first_deployed_at",
+                    "version",
+                    "author",
+                    "base_rate",
+                    "heap_max_bytes"
+                  ]
+                },
+                {
+                  "event": "checkpoint",
+                  "failed": false,
+                  "duration_ms": {
+                    "_gen": "math",
+                    "expr": "x * f",
+                    "names": {
+                      "x": {
+                        "_gen": "var",
+                        "var": "forkKey",
+                        "path": [
+                          "ckpt_ms"
+                        ]
+                      },
+                      "f": {
+                        "_gen": "uniformDistribution",
+                        "bounds": [
+                          0.8,
+                          1.25
+                        ]
+                      }
+                    },
+                    "decimals": 0
+                  },
+                  "size_bytes": {
+                    "_gen": "math",
+                    "expr": "x * f",
+                    "names": {
+                      "x": {
+                        "_gen": "var",
+                        "var": "forkKey",
+                        "path": [
+                          "state_bytes"
+                        ]
+                      },
+                      "f": {
+                        "_gen": "uniformDistribution",
+                        "bounds": [
+                          0.05,
+                          0.2
+                        ]
+                      }
+                    },
+                    "decimals": 0
+                  },
+                  "state_size_bytes": {
+                    "_gen": "math",
+                    "expr": "x * f",
+                    "names": {
+                      "x": {
+                        "_gen": "var",
+                        "var": "forkKey",
+                        "path": [
+                          "state_bytes"
+                        ]
+                      },
+                      "f": {
+                        "_gen": "uniformDistribution",
+                        "bounds": [
+                          0.98,
+                          1.02
+                        ]
+                      }
+                    },
+                    "decimals": 0
+                  },
+                  "failure_reason": null
+                }
+              ]
+            }
+          },
+          "checkpoint_slow": {
+            "value": {
+              "_gen": "merge",
+              "objects": [
+                {
+                  "_gen": "var",
+                  "var": "forkKey",
+                  "selectKeys": [
+                    "job_name",
+                    "tenant",
+                    "owner",
+                    "tier",
+                    "kind",
+                    "max_parallelism",
+                    "parallelism",
+                    "cluster",
+                    "input_topic",
+                    "sink_table",
+                    "first_deployed_at",
+                    "version",
+                    "author",
+                    "base_rate",
+                    "heap_max_bytes"
+                  ]
+                },
+                {
+                  "event": "checkpoint",
+                  "failed": false,
+                  "duration_ms": {
+                    "_gen": "uniformDistribution",
+                    "bounds": [
+                      12000,
+                      26000
+                    ],
+                    "decimals": 0
+                  },
+                  "size_bytes": {
+                    "_gen": "math",
+                    "expr": "x * f",
+                    "names": {
+                      "x": {
+                        "_gen": "var",
+                        "var": "forkKey",
+                        "path": [
+                          "state_bytes"
+                        ]
+                      },
+                      "f": {
+                        "_gen": "uniformDistribution",
+                        "bounds": [
+                          0.05,
+                          0.2
+                        ]
+                      }
+                    },
+                    "decimals": 0
+                  },
+                  "state_size_bytes": {
+                    "_gen": "math",
+                    "expr": "x * f",
+                    "names": {
+                      "x": {
+                        "_gen": "var",
+                        "var": "forkKey",
+                        "path": [
+                          "state_bytes"
+                        ]
+                      },
+                      "f": {
+                        "_gen": "uniformDistribution",
+                        "bounds": [
+                          0.98,
+                          1.02
+                        ]
+                      }
+                    },
+                    "decimals": 0
+                  },
+                  "failure_reason": null
+                }
+              ]
+            }
+          },
+          "checkpoint_expired": {
+            "value": {
+              "_gen": "merge",
+              "objects": [
+                {
+                  "_gen": "var",
+                  "var": "forkKey",
+                  "selectKeys": [
+                    "job_name",
+                    "tenant",
+                    "owner",
+                    "tier",
+                    "kind",
+                    "max_parallelism",
+                    "parallelism",
+                    "cluster",
+                    "input_topic",
+                    "sink_table",
+                    "first_deployed_at",
+                    "version",
+                    "author",
+                    "base_rate",
+                    "heap_max_bytes"
+                  ]
+                },
+                {
+                  "event": "checkpoint",
+                  "failed": true,
+                  "duration_ms": 30000,
+                  "size_bytes": 0,
+                  "state_size_bytes": {
+                    "_gen": "math",
+                    "expr": "x * f",
+                    "names": {
+                      "x": {
+                        "_gen": "var",
+                        "var": "forkKey",
+                        "path": [
+                          "state_bytes"
+                        ]
+                      },
+                      "f": {
+                        "_gen": "uniformDistribution",
+                        "bounds": [
+                          0.98,
+                          1.02
+                        ]
+                      }
+                    },
+                    "decimals": 0
+                  },
+                  "failure_reason": "Checkpoint expired before completing."
+                }
+              ]
+            }
+          },
+          "chatter": {
+            "value": {
+              "_gen": "merge",
+              "objects": [
+                {
+                  "_gen": "var",
+                  "var": "forkKey",
+                  "selectKeys": [
+                    "job_name",
+                    "tenant",
+                    "owner",
+                    "tier",
+                    "kind",
+                    "max_parallelism",
+                    "parallelism",
+                    "cluster",
+                    "input_topic",
+                    "sink_table",
+                    "first_deployed_at",
+                    "version",
+                    "author",
+                    "base_rate",
+                    "heap_max_bytes"
+                  ]
+                },
+                {
+                  "event": "log",
+                  "level": {
+                    "_gen": "var",
+                    "var": "forkKey",
+                    "path": [
+                      "chatter",
+                      "level"
+                    ]
+                  },
+                  "logger": {
+                    "_gen": "var",
+                    "var": "forkKey",
+                    "path": [
+                      "chatter",
+                      "logger"
+                    ]
+                  },
+                  "message": {
+                    "_gen": "var",
+                    "var": "forkKey",
+                    "path": [
+                      "chatter",
+                      "message"
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "deploy": {
+            "value": {
+              "_gen": "merge",
+              "objects": [
+                {
+                  "_gen": "var",
+                  "var": "forkKey",
+                  "selectKeys": [
+                    "job_name",
+                    "tenant",
+                    "owner",
+                    "tier",
+                    "kind",
+                    "max_parallelism",
+                    "parallelism",
+                    "cluster",
+                    "input_topic",
+                    "sink_table",
+                    "first_deployed_at",
+                    "version",
+                    "author",
+                    "base_rate",
+                    "heap_max_bytes"
+                  ]
+                },
+                {
+                  "event": "deploy",
+                  "summary": {
+                    "_gen": "oneOf",
+                    "choices": [
+                      "Bump connector versions",
+                      "Tune watermark idleness",
+                      "Add field to output schema",
+                      "Refactor enrichment lookups",
+                      "Raise sink batch size",
+                      "Fix late-event handling",
+                      "Upgrade Jackson",
+                      "Add metrics for dropped records"
+                    ]
+                  },
+                  "commit_sha": {
+                    "_gen": "gitSha"
+                  }
+                }
+              ]
+            },
+            "localConfigs": {
+              "throttleMs": 15000
+            }
+          },
+          "post_deploy_failure": {
+            "value": {
+              "_gen": "merge",
+              "objects": [
+                {
+                  "_gen": "var",
+                  "var": "forkKey",
+                  "selectKeys": [
+                    "job_name",
+                    "tenant",
+                    "owner",
+                    "tier",
+                    "kind",
+                    "max_parallelism",
+                    "parallelism",
+                    "cluster",
+                    "input_topic",
+                    "sink_table",
+                    "first_deployed_at",
+                    "version",
+                    "author",
+                    "base_rate",
+                    "heap_max_bytes"
+                  ]
+                },
+                {
+                  "event": "failure",
+                  "failure": {
+                    "_gen": "var",
+                    "var": "forkKey",
+                    "path": [
+                      "startup_failure"
+                    ]
+                  }
+                }
+              ]
+            },
+            "localConfigs": {
+              "throttleMs": 20000
+            }
+          },
+          "tm_lost": {
+            "value": {
+              "_gen": "merge",
+              "objects": [
+                {
+                  "_gen": "var",
+                  "var": "forkKey",
+                  "selectKeys": [
+                    "job_name",
+                    "tenant",
+                    "owner",
+                    "tier",
+                    "kind",
+                    "max_parallelism",
+                    "parallelism",
+                    "cluster",
+                    "input_topic",
+                    "sink_table",
+                    "first_deployed_at",
+                    "version",
+                    "author",
+                    "base_rate",
+                    "heap_max_bytes"
+                  ]
+                },
+                {
+                  "event": "failure",
+                  "failure": {
+                    "_gen": "var",
+                    "var": "forkKey",
+                    "path": [
+                      "tm_failure"
+                    ]
+                  }
+                }
+              ]
+            },
+            "localConfigs": {
+              "throttleMs": 3000
+            }
+          },
+          "tm_lost_checkpoint": {
+            "value": {
+              "_gen": "merge",
+              "objects": [
+                {
+                  "_gen": "var",
+                  "var": "forkKey",
+                  "selectKeys": [
+                    "job_name",
+                    "tenant",
+                    "owner",
+                    "tier",
+                    "kind",
+                    "max_parallelism",
+                    "parallelism",
+                    "cluster",
+                    "input_topic",
+                    "sink_table",
+                    "first_deployed_at",
+                    "version",
+                    "author",
+                    "base_rate",
+                    "heap_max_bytes"
+                  ]
+                },
+                {
+                  "event": "checkpoint",
+                  "failed": true,
+                  "duration_ms": {
+                    "_gen": "uniformDistribution",
+                    "bounds": [
+                      2000,
+                      9000
+                    ],
+                    "decimals": 0
+                  },
+                  "size_bytes": 0,
+                  "state_size_bytes": {
+                    "_gen": "math",
+                    "expr": "x * f",
+                    "names": {
+                      "x": {
+                        "_gen": "var",
+                        "var": "forkKey",
+                        "path": [
+                          "state_bytes"
+                        ]
+                      },
+                      "f": {
+                        "_gen": "uniformDistribution",
+                        "bounds": [
+                          0.98,
+                          1.02
+                        ]
+                      }
+                    },
+                    "decimals": 0
+                  },
+                  "failure_reason": "Checkpoint was declined (task failure)."
+                }
+              ]
+            }
+          },
+          "flap": {
+            "value": {
+              "_gen": "merge",
+              "objects": [
+                {
+                  "_gen": "var",
+                  "var": "forkKey",
+                  "selectKeys": [
+                    "job_name",
+                    "tenant",
+                    "owner",
+                    "tier",
+                    "kind",
+                    "max_parallelism",
+                    "parallelism",
+                    "cluster",
+                    "input_topic",
+                    "sink_table",
+                    "first_deployed_at",
+                    "version",
+                    "author",
+                    "base_rate",
+                    "heap_max_bytes"
+                  ]
+                },
+                {
+                  "event": "failure",
+                  "failure": {
+                    "_gen": "var",
+                    "var": "forkKey",
+                    "path": [
+                      "flap_failure"
+                    ]
+                  }
+                }
+              ]
+            },
+            "localConfigs": {
+              "throttleMs": 8000
+            }
+          },
+          "recovered": {
+            "value": {
+              "_gen": "merge",
+              "objects": [
+                {
+                  "_gen": "var",
+                  "var": "forkKey",
+                  "selectKeys": [
+                    "job_name",
+                    "tenant",
+                    "owner",
+                    "tier",
+                    "kind",
+                    "max_parallelism",
+                    "parallelism",
+                    "cluster",
+                    "input_topic",
+                    "sink_table",
+                    "first_deployed_at",
+                    "version",
+                    "author",
+                    "base_rate",
+                    "heap_max_bytes"
+                  ]
+                },
+                {
+                  "event": "recovered"
+                }
+              ]
+            }
+          },
+          "peak": {
+            "value": {
+              "_gen": "merge",
+              "objects": [
+                {
+                  "_gen": "var",
+                  "var": "forkKey",
+                  "selectKeys": [
+                    "job_name",
+                    "tenant",
+                    "owner",
+                    "tier",
+                    "kind",
+                    "max_parallelism",
+                    "parallelism",
+                    "cluster",
+                    "input_topic",
+                    "sink_table",
+                    "first_deployed_at",
+                    "version",
+                    "author",
+                    "base_rate",
+                    "heap_max_bytes"
+                  ]
+                },
+                {
+                  "event": "metrics",
+                  "records_in_per_sec": {
+                    "_gen": "math",
+                    "expr": "x * f",
+                    "names": {
+                      "x": {
+                        "_gen": "var",
+                        "var": "forkKey",
+                        "path": [
+                          "base_rate"
+                        ]
+                      },
+                      "f": {
+                        "_gen": "uniformDistribution",
+                        "bounds": [
+                          1.8,
+                          2.6
+                        ]
+                      }
+                    },
+                    "decimals": 1
+                  },
+                  "busy_ms_per_sec": {
+                    "_gen": "uniformDistribution",
+                    "bounds": [
+                      930,
+                      1000
+                    ],
+                    "decimals": 0
+                  },
+                  "backpressured_ms_per_sec": {
+                    "_gen": "uniformDistribution",
+                    "bounds": [
+                      550,
+                      900
+                    ],
+                    "decimals": 0
+                  },
+                  "pending_records": {
+                    "_gen": "math",
+                    "expr": "x * f",
+                    "names": {
+                      "x": {
+                        "_gen": "var",
+                        "var": "forkKey",
+                        "path": [
+                          "peak_lag"
+                        ]
+                      },
+                      "f": {
+                        "_gen": "uniformDistribution",
+                        "bounds": [
+                          0.5,
+                          1.0
+                        ]
+                      }
+                    },
+                    "decimals": 0
+                  },
+                  "heap_used_ratio": {
+                    "_gen": "math",
+                    "expr": "x * f",
+                    "names": {
+                      "x": {
+                        "_gen": "var",
+                        "var": "forkKey",
+                        "path": [
+                          "heap_ratio"
+                        ]
+                      },
+                      "f": {
+                        "_gen": "uniformDistribution",
+                        "bounds": [
+                          0.92,
+                          1.08
+                        ]
+                      }
+                    },
+                    "decimals": 3
+                  }
+                }
+              ]
+            }
+          },
+          "crash": {
+            "value": {
+              "_gen": "merge",
+              "objects": [
+                {
+                  "_gen": "var",
+                  "var": "forkKey",
+                  "selectKeys": [
+                    "job_name",
+                    "tenant",
+                    "owner",
+                    "tier",
+                    "kind",
+                    "max_parallelism",
+                    "parallelism",
+                    "cluster",
+                    "input_topic",
+                    "sink_table",
+                    "first_deployed_at",
+                    "version",
+                    "author",
+                    "base_rate",
+                    "heap_max_bytes"
+                  ]
+                },
+                {
+                  "event": "failure",
+                  "failure": {
+                    "_gen": "var",
+                    "var": "forkKey",
+                    "path": [
+                      "crash_failure"
+                    ]
+                  }
+                }
+              ]
+            },
+            "localConfigs": {
+              "throttleMs": 40000
+            }
+          },
+          "crash_restarted": {
+            "value": {
+              "_gen": "merge",
+              "objects": [
+                {
+                  "_gen": "var",
+                  "var": "forkKey",
+                  "selectKeys": [
+                    "job_name",
+                    "tenant",
+                    "owner",
+                    "tier",
+                    "kind",
+                    "max_parallelism",
+                    "parallelism",
+                    "cluster",
+                    "input_topic",
+                    "sink_table",
+                    "first_deployed_at",
+                    "version",
+                    "author",
+                    "base_rate",
+                    "heap_max_bytes"
+                  ]
+                },
+                {
+                  "event": "recovered"
+                }
+              ]
+            },
+            "localConfigs": {
+              "throttleMs": 20000
+            }
+          },
+          "crash_running": {
+            "value": {
+              "_gen": "merge",
+              "objects": [
+                {
+                  "_gen": "var",
+                  "var": "forkKey",
+                  "selectKeys": [
+                    "job_name",
+                    "tenant",
+                    "owner",
+                    "tier",
+                    "kind",
+                    "max_parallelism",
+                    "parallelism",
+                    "cluster",
+                    "input_topic",
+                    "sink_table",
+                    "first_deployed_at",
+                    "version",
+                    "author",
+                    "base_rate",
+                    "heap_max_bytes"
+                  ]
+                },
+                {
+                  "event": "metrics",
+                  "records_in_per_sec": {
+                    "_gen": "math",
+                    "expr": "x * f",
+                    "names": {
+                      "x": {
+                        "_gen": "var",
+                        "var": "forkKey",
+                        "path": [
+                          "base_rate"
+                        ]
+                      },
+                      "f": {
+                        "_gen": "uniformDistribution",
+                        "bounds": [
+                          1.2,
+                          1.6
+                        ]
+                      }
+                    },
+                    "decimals": 1
+                  },
+                  "busy_ms_per_sec": {
+                    "_gen": "uniformDistribution",
+                    "bounds": [
+                      600,
+                      900
+                    ],
+                    "decimals": 0
+                  },
+                  "backpressured_ms_per_sec": {
+                    "_gen": "uniformDistribution",
+                    "bounds": [
+                      100,
+                      400
+                    ],
+                    "decimals": 0
+                  },
+                  "pending_records": {
+                    "_gen": "math",
+                    "expr": "x * f",
+                    "names": {
+                      "x": {
+                        "_gen": "var",
+                        "var": "forkKey",
+                        "path": [
+                          "base_lag"
+                        ]
+                      },
+                      "f": {
+                        "_gen": "uniformDistribution",
+                        "bounds": [
+                          2,
+                          4
+                        ]
+                      }
+                    },
+                    "decimals": 0
+                  },
+                  "heap_used_ratio": {
+                    "_gen": "math",
+                    "expr": "x * f",
+                    "names": {
+                      "x": {
+                        "_gen": "var",
+                        "var": "forkKey",
+                        "path": [
+                          "heap_ratio"
+                        ]
+                      },
+                      "f": {
+                        "_gen": "uniformDistribution",
+                        "bounds": [
+                          0.92,
+                          1.08
+                        ]
+                      }
+                    },
+                    "decimals": 3
+                  }
+                }
+              ]
+            }
+          },
+          "stalled": {
+            "value": {
+              "_gen": "merge",
+              "objects": [
+                {
+                  "_gen": "var",
+                  "var": "forkKey",
+                  "selectKeys": [
+                    "job_name",
+                    "tenant",
+                    "owner",
+                    "tier",
+                    "kind",
+                    "max_parallelism",
+                    "parallelism",
+                    "cluster",
+                    "input_topic",
+                    "sink_table",
+                    "first_deployed_at",
+                    "version",
+                    "author",
+                    "base_rate",
+                    "heap_max_bytes"
+                  ]
+                },
+                {
+                  "event": "metrics",
+                  "records_in_per_sec": 0,
+                  "busy_ms_per_sec": 0,
+                  "backpressured_ms_per_sec": 0,
+                  "pending_records": {
+                    "_gen": "math",
+                    "expr": "p + r * 10",
+                    "decimals": 0,
+                    "names": {
+                      "p": {
+                        "_gen": "previousEvent",
+                        "path": [
+                          "value",
+                          "pending_records"
+                        ]
+                      },
+                      "r": {
+                        "_gen": "var",
+                        "var": "forkKey",
+                        "path": [
+                          "base_rate"
+                        ]
+                      }
+                    }
+                  },
+                  "heap_used_ratio": {
+                    "_gen": "math",
+                    "expr": "x * f",
+                    "names": {
+                      "x": {
+                        "_gen": "var",
+                        "var": "forkKey",
+                        "path": [
+                          "heap_ratio"
+                        ]
+                      },
+                      "f": {
+                        "_gen": "uniformDistribution",
+                        "bounds": [
+                          0.92,
+                          1.08
+                        ]
+                      }
+                    },
+                    "decimals": 3
+                  }
+                }
+              ]
+            }
+          },
+          "growing_start": {
+            "value": {
+              "_gen": "merge",
+              "objects": [
+                {
+                  "_gen": "var",
+                  "var": "forkKey",
+                  "selectKeys": [
+                    "job_name",
+                    "tenant",
+                    "owner",
+                    "tier",
+                    "kind",
+                    "max_parallelism",
+                    "parallelism",
+                    "cluster",
+                    "input_topic",
+                    "sink_table",
+                    "first_deployed_at",
+                    "version",
+                    "author",
+                    "base_rate",
+                    "heap_max_bytes"
+                  ]
+                },
+                {
+                  "event": "checkpoint",
+                  "failed": false,
+                  "duration_ms": {
+                    "_gen": "math",
+                    "expr": "x * f",
+                    "names": {
+                      "x": {
+                        "_gen": "var",
+                        "var": "forkKey",
+                        "path": [
+                          "ckpt_ms"
+                        ]
+                      },
+                      "f": {
+                        "_gen": "uniformDistribution",
+                        "bounds": [
+                          1.5,
+                          2
+                        ]
+                      }
+                    },
+                    "decimals": 0
+                  },
+                  "size_bytes": {
+                    "_gen": "math",
+                    "expr": "x * f",
+                    "names": {
+                      "x": {
+                        "_gen": "var",
+                        "var": "forkKey",
+                        "path": [
+                          "state_bytes"
+                        ]
+                      },
+                      "f": {
+                        "_gen": "uniformDistribution",
+                        "bounds": [
+                          0.1,
+                          0.2
+                        ]
+                      }
+                    },
+                    "decimals": 0
+                  },
+                  "state_size_bytes": {
+                    "_gen": "math",
+                    "expr": "x * f",
+                    "names": {
+                      "x": {
+                        "_gen": "var",
+                        "var": "forkKey",
+                        "path": [
+                          "state_bytes"
+                        ]
+                      },
+                      "f": {
+                        "_gen": "uniformDistribution",
+                        "bounds": [
+                          1.5,
+                          2
+                        ]
+                      }
+                    },
+                    "decimals": 0
+                  },
+                  "failure_reason": null
+                }
+              ]
+            }
+          },
+          "growing": {
+            "value": {
+              "_gen": "merge",
+              "objects": [
+                {
+                  "_gen": "var",
+                  "var": "forkKey",
+                  "selectKeys": [
+                    "job_name",
+                    "tenant",
+                    "owner",
+                    "tier",
+                    "kind",
+                    "max_parallelism",
+                    "parallelism",
+                    "cluster",
+                    "input_topic",
+                    "sink_table",
+                    "first_deployed_at",
+                    "version",
+                    "author",
+                    "base_rate",
+                    "heap_max_bytes"
+                  ]
+                },
+                {
+                  "event": "checkpoint",
+                  "failed": false,
+                  "duration_ms": {
+                    "_gen": "math",
+                    "expr": "p * 1.06",
+                    "names": {
+                      "p": {
+                        "_gen": "previousEvent",
+                        "path": [
+                          "value",
+                          "duration_ms"
+                        ]
+                      }
+                    },
+                    "decimals": 0
+                  },
+                  "size_bytes": {
+                    "_gen": "math",
+                    "expr": "p * 1.03",
+                    "names": {
+                      "p": {
+                        "_gen": "previousEvent",
+                        "path": [
+                          "value",
+                          "size_bytes"
+                        ]
+                      }
+                    },
+                    "decimals": 0
+                  },
+                  "state_size_bytes": {
+                    "_gen": "math",
+                    "expr": "p * 1.05",
+                    "names": {
+                      "p": {
+                        "_gen": "previousEvent",
+                        "path": [
+                          "value",
+                          "state_size_bytes"
+                        ]
+                      }
+                    },
+                    "decimals": 0
+                  },
+                  "failure_reason": null
+                }
+              ]
+            }
+          }
+        }
+      },
+      "localConfigs": {
+        "throttleMs": 10000
+      }
+    }
+  ],
+  "connections": {
+    "kafka": {
+      "kind": "kafka",
+      "producerConfigs": {
+        "bootstrap.servers": "kafka:9092",
+        "key.serializer": "org.apache.kafka.common.serialization.StringSerializer",
+        "value.serializer": "io.shadowtraffic.kafka.serdes.JsonSerializer"
+      }
+    }
+  }
+}

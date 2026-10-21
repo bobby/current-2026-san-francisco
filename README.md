@@ -38,6 +38,7 @@ make smoke        # end-to-end check: Flink job → S3 checkpoint → Prometheus
 make jobs-submit  # build the Java jobs jar and submit all six jobs
 make jobs-test    # every job commits to Iceberg; every fault fails as designed (a few minutes)
 make telemetry-test  # job status, checkpoints, logs and alerts reach Kafka and the ops DB
+make fleet-test   # the simulated fleet looks like real jobs; the naive alerts flow (~15 min)
 make rust-test    # Rust unit tests and ops DB tests (needs a Rust toolchain)
 make down         # stop (keep data); `make clean` also deletes volumes
 ```
@@ -62,7 +63,7 @@ scripts/jobs.sh list
 scripts/jobs.sh cancel positions-aggregator
 ```
 
-Then open the Flink UI at http://localhost:8081, Prometheus at http://localhost:9090, and the RustFS console at http://localhost:9001. Copy `.env.example` to `.env` to override the defaults.
+Then open the Flink UI at http://localhost:8081, Prometheus at http://localhost:9090, Alertmanager at http://localhost:9093, and the RustFS console at http://localhost:9001. Copy `.env.example` to `.env` to override the defaults.
 
 #### Running on AWS
 

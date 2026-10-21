@@ -1,4 +1,4 @@
-.PHONY: up down clean ps logs smoke jobs jobs-submit jobs-cancel jobs-list jobs-test license rust-test telemetry-test cicd-test \
+.PHONY: up down clean ps logs smoke jobs jobs-submit jobs-cancel jobs-list jobs-test license rust-test telemetry-test cicd-test fleet-test \
 	stack-aws secrets-aws deploy-aws jobs-submit-aws ps-aws tunnel teardown-aws
 
 MAVEN_IMAGE := maven:3.9.16-eclipse-temurin-17
@@ -6,6 +6,8 @@ MAVEN_IMAGE := maven:3.9.16-eclipse-temurin-17
 # Build images and start the local platform, waiting until it's healthy.
 up: license
 	docker compose up -d --build --wait
+	@# Config files are mounted, so apply edits to running containers too.
+	@curl -sf -X POST localhost:9090/-/reload && curl -sf -X POST localhost:9093/-/reload
 
 # Stop the platform, keeping data volumes.
 down:
@@ -61,6 +63,11 @@ telemetry-test: jobs
 # (issue #6). Takes a few minutes.
 cicd-test: jobs
 	./scripts/cicd-test.sh
+
+# The simulated fleet registers, emits events and metrics like real jobs, and
+# the naive alert rules fire on it (issue #5). Waits for alerts to build up.
+fleet-test:
+	./scripts/fleet-test.sh
 
 license:
 	@test -f shadowtraffic/license.env || { \

@@ -4,11 +4,13 @@
 //! Flink's logs carry only the job ID, and its Prometheus reporter rewrites
 //! label values (`payments-enrichment` becomes `payments_enrichment`). Real
 //! jobs are resolved from the Flink REST API; simulated fleet jobs from the
-//! ops DB's job registry.
+//! ops DB's job registry. Both lookups are rate-limited: the fleet's alerts
+//! carry job IDs Flink has never heard of.
 
 use std::{
     collections::HashMap,
-    sync::{Arc, RwLock},
+    sync::{Arc, Mutex, RwLock},
+    time::{Duration, Instant},
 };
 
 use platform_clients::{flink::FlinkClient, ops_db::OpsDb};
@@ -20,7 +22,18 @@ pub struct JobNames {
     db: OpsDb,
     /// Flink job ID → job name.
     by_id: Arc<RwLock<HashMap<String, String>>>,
+    /// When Flink's job list was last fetched to resolve an unknown ID.
+    flink_refreshed: Arc<Mutex<Option<Instant>>>,
+    registry: Arc<Mutex<Option<RegistryNames>>>,
 }
+
+/// The registry's job names by rewritten label, and when they were read.
+type RegistryNames = (Instant, HashMap<String, String>);
+
+/// How often an unknown job ID may trigger a Flink lookup.
+const FLINK_REFRESH: Duration = Duration::from_secs(5);
+/// How long the registry's names are cached.
+const REGISTRY_TTL: Duration = Duration::from_secs(30);
 
 /// Rewrites a label value as Flink's Prometheus reporter does: every
 /// character outside `[A-Za-z0-9:_]` becomes `_`.
@@ -30,7 +43,7 @@ pub fn prometheus_label(value: &str) -> String {
 
 impl JobNames {
     pub fn new(flink: FlinkClient, db: OpsDb) -> Self {
-        Self { flink, db, by_id: Default::default() }
+        Self { flink, db, by_id: Default::default(), flink_refreshed: Default::default(), registry: Default::default() }
     }
 
     /// Records the name of a job the poller has seen.
@@ -47,6 +60,13 @@ impl JobNames {
     pub async fn by_flink_id(&self, flink_job_id: &str) -> Option<String> {
         if let Some(name) = self.cached(flink_job_id) {
             return Some(name);
+        }
+        {
+            let mut refreshed = self.flink_refreshed.lock().unwrap();
+            if refreshed.is_some_and(|at| at.elapsed() < FLINK_REFRESH) {
+                return None;
+            }
+            *refreshed = Some(Instant::now());
         }
         match self.flink.jobs().await {
             Ok(jobs) => jobs.iter().for_each(|job| self.insert(&job.jid, &job.name)),
@@ -69,15 +89,30 @@ impl JobNames {
         if known.is_some() {
             return known;
         }
+        Some(self.registry_name(label).await.unwrap_or_else(|| label.clone()))
+    }
+
+    /// The registry's job whose rewritten name is `label`.
+    async fn registry_name(&self, label: &str) -> Option<String> {
+        let fresh = |cache: &Option<RegistryNames>| {
+            cache.as_ref().filter(|(at, _)| at.elapsed() < REGISTRY_TTL).map(|(_, names)| names.get(label).cloned())
+        };
+        if let Some(found) = fresh(&self.registry.lock().unwrap()) {
+            return found;
+        }
         match self.db.job_names().await {
             Ok(names) => {
-                if let Some(name) = names.into_iter().find(|name| prometheus_label(name) == *label) {
-                    return Some(name);
-                }
+                let names: HashMap<String, String> =
+                    names.into_iter().map(|name| (prometheus_label(&name), name)).collect();
+                let found = names.get(label).cloned();
+                *self.registry.lock().unwrap() = Some((Instant::now(), names));
+                found
             }
-            Err(err) => warn!(%err, "reading job names from the ops DB"),
+            Err(err) => {
+                warn!(%err, "reading job names from the ops DB");
+                None
+            }
         }
-        Some(label.clone())
     }
 
     /// The tenant of a job, from the registry.

@@ -1,0 +1,63 @@
+# Alert rules for every Flink job, real or simulated (docs/design.md §5.3).
+#
+# They are deliberately naive: the static thresholds every platform starts
+# with, firing on any restart or slow checkpoint. Across the fleet they
+# produce a steady stream of mostly false positives, which is the "before"
+# picture Scenario 1's triage agent works from. Don't tune them to be smart.
+#
+# They aggregate by job_id and job_name only, the labels real and simulated
+# series share, so they can't tell the two apart.
+
+groups:
+  - name: flink-jobs
+    interval: 15s
+    rules:
+      - alert: FlinkJobRestarted
+        expr: increase(flink_jobmanager_job_numRestarts[2m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.job_name }} restarted"
+          description: "{{ $value | humanize }} restarts in the last 2 minutes."
+
+      - alert: FlinkJobNotRunning
+        expr: flink_jobmanager_job_downtime > 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job_name }} is not running"
+          description: "Down for {{ $value | humanizeDuration }}."
+
+      - alert: FlinkCheckpointFailed
+        expr: increase(flink_jobmanager_job_numberOfFailedCheckpoints[5m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.job_name }} failed a checkpoint"
+
+      - alert: FlinkCheckpointSlow
+        expr: flink_jobmanager_job_lastCheckpointDuration > 10000
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.job_name }} checkpoint took over 10 s"
+          description: "Last checkpoint took {{ $value | humanize }} ms."
+
+      - alert: FlinkConsumerLagHigh
+        expr: sum by (job_id, job_name) (flink_taskmanager_job_task_operator_pendingRecords) > 50000
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.job_name }} is lagging"
+          description: "{{ $value | humanize }} records behind."
+
+      - alert: FlinkBackpressure
+        expr: max by (job_id, job_name) (flink_taskmanager_job_task_backPressuredTimeMsPerSecond) > 500
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.job_name }} is backpressured"
+          description: "Backpressured {{ $value | humanize }} ms/s."

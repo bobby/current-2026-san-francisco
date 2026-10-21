@@ -2,7 +2,7 @@
 
 These are the Prometheus metrics the real Flink 2.1.2 jobs actually report. They were scraped from the local platform with all six jobs running (issue #2). The simulated fleet (#5) must emit **exactly these names and labels**, so that queries, alert rules and agents treat real and simulated jobs the same way (docs/design.md §5.2).
 
-Flink reports about 370 `flink_*` series names. This is the curated subset the telemetry plane uses.
+Flink reports about 370 `flink_*` series names. This is the curated subset the telemetry plane uses. The fleet-exporter serves all of them except the cluster-capacity metrics, which describe only the real cluster. `make fleet-test` checks that each one has a single label set across real and simulated series.
 
 ## Labels
 

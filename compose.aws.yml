@@ -69,6 +69,18 @@ services:
     image: ${SERVICES_IMAGE:?}
     build: !reset null
 
+  fleet-exporter:
+    image: ${SERVICES_IMAGE:?}
+    build: !reset null
+
+  # The full fleet: about 1,000 jobs.
+  st-fleet:
+    volumes:
+      - ./shadowtraffic/fleet/roster-cloud.json:/fleet/roster.json:ro
+    environment:
+      JAVA_TOOL_OPTIONS: -Xmx1536m
+    mem_limit: 2g
+
   kafka:
     environment:
       KAFKA_HEAP_OPTS: -Xms1g -Xmx1g

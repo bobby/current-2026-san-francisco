@@ -188,7 +188,10 @@ ShadowTraffic emits `platform.deployments` events for the simulated fleet in the
 ShadowTraffic runs as several containers, all with `--seed`:
 
 - **`st-inputs`**: steady input data for the real jobs' Kafka topics.
-- **`st-fleet`**: telemetry for about 1,000 fictional jobs across about 40 tenants. It covers the job registry, deployments, job status transitions, checkpoint events, log events and metric samples, published to the same `platform.*` topics as the real jobs. It contains realistic noise (§7.2) and a few genuine fleet problems.
+- **`st-fleet`** simulates a fleet of fictional jobs: about 1,000 across 40 tenants on AWS, and a 200-job subset with every tenant locally. `shadowtraffic/fleet/generate.py` generates both its config (`shadowtraffic/fleet.json`) and the rosters (`shadowtraffic/fleet/roster-{cloud,local}.json`), deterministically.
+  - It forks one seeded state machine per job. Each 10 s tick is one step: a metrics sample, a checkpoint, a failure, a recovery, a deploy or a log line. The roster gives each job its identity, normal operating values and behaviour profile, as transition weights.
+  - The profiles produce the noise of §7.2 and a few genuine problems: a crash loop, a stalled consumer and runaway state growth.
+  - A ShadowTraffic generator writes to one topic, and per-topic generators couldn't keep a job's restart, logs, metrics and checkpoints consistent. So `st-fleet` writes each job's steps to the internal `fleet.telemetry` topic, and the **fleet-exporter** (§5.2) fans them out into the same `platform.*` events real jobs produce.
 - **Fault injectors** are short-lived ShadowTraffic runs that the director starts at scripted moments (`maxMs` / `maxEvents`), for example poison records into `trade-events` or a traffic spike into `market-data`. Running separate containers makes fault timing exact, without relying on ShadowTraffic `schedule.stages`, which runs stages one after another.
 
 ShadowTraffic can also write Iceberg directly to Glue. We may use that to fill fleet tables for visual realism, but it's optional.
@@ -225,15 +228,15 @@ ShadowTraffic can also write Iceberg directly to Glue. We may use that to fill f
 
 | Topic | Producers | Contents |
 |---|---|---|
-| `platform.jobs` (compacted) | cicd-sim, st-fleet | Job registry: id, name, tenant, owner, tier, current version, deployed_at, first_deployed_at |
-| `platform.deployments` | cicd-sim, st-fleet | Deployment events (§4.3) |
-| `platform.job-status` | collector, st-fleet | Status transitions, restarts, failure causes |
-| `platform.checkpoints` | collector, st-fleet | Completed and failed checkpoints: duration, size, failure reason |
-| `platform.logs` | collector (from Vector), st-fleet | Structured log events: job, level, logger, message, exception class, root cause, stack-trace head |
-| `platform.metrics` | st-fleet | Simulated metric samples. Real metrics are scraped directly by Prometheus |
+| `platform.jobs` (compacted) | cicd-sim, fleet-exporter | Job registry: id, name, tenant, owner, tier, current version, deployed_at, first_deployed_at |
+| `platform.deployments` | cicd-sim, fleet-exporter | Deployment events (§4.3) |
+| `platform.job-status` | collector, fleet-exporter | Status transitions, restarts, failure causes |
+| `platform.checkpoints` | collector, fleet-exporter | Completed and failed checkpoints: duration, size, failure reason, path |
+| `platform.logs` | collector (from Vector), fleet-exporter | Structured log events: job, level, logger, message, exception class, root cause, stack-trace head |
 | `platform.alerts` | collector (from Alertmanager) | Fired and resolved alerts |
 | `platform.signals` | triage | Scenario 1 output: alerts with Jev judgments and a disposition |
 | `platform.actions` | operator, chatops-bot, cicd-sim | Audit log of every remediation proposed, approved or executed |
+| `fleet.telemetry` | st-fleet | Internal: the simulated fleet's per-job steps, for the fleet-exporter. Agents never read it |
 
 The schemas live in a shared Rust crate (`crates/platform-model`), with matching JSON Schema files generated from it in `crates/platform-model/schemas/<topic>.schema.json`, which the ShadowTraffic configs target. Conventions:
 
@@ -241,7 +244,7 @@ The schemas live in a shared Rust crate (`crates/platform-model`), with matching
 - Timestamps are RFC 3339 strings in UTC.
 - `event_id` is a UUID. The collector derives it from Flink's own identifiers (job ID plus checkpoint ID, failure timestamp and so on), so history it re-reads after a restart is stored once.
 
-`kafka-init` creates the topics at start-up. `platform.jobs` is compacted, `platform.metrics` keeps an hour and `platform.logs` a day.
+`kafka-init` creates the topics at start-up. `platform.jobs` is compacted, `fleet.telemetry` keeps an hour and `platform.logs` a day.
 
 ### 5.1.1 Collector
 
@@ -252,19 +255,27 @@ The collector (`services/collector`) is one Rust service with four parts:
   - It publishes each finished checkpoint, completed or failed, to `platform.checkpoints`.
 - **Alertmanager webhook** (`POST /alertmanager`). Each firing or resolved alert becomes one `platform.alerts` event, however often Alertmanager repeats it. Flink's reporter rewrites `job_name` labels (`payments_enrichment`), so the collector maps them back to the platform name from the Flink job ID or the job registry, and adds the tenant from the registry.
 - **Log intake** (`POST /logs`). Vector tails the Flink containers' JSON logs and forwards job-scoped warnings and errors. Flink's log lines carry only the job ID, so the collector adds the job name and publishes `platform.logs`.
-- **Ops DB sink.** It consumes every `platform.*` topic except metrics into Postgres, storing a consumer offset only after the write succeeds.
+- **Ops DB sink.** It consumes every `platform.*` topic into Postgres, storing a consumer offset only after the write succeeds.
 
 ### 5.2 Metrics
 
-The real Flink metrics are scraped directly. The **fleet-exporter** consumes `platform.metrics` and exposes the same metric names with the same labels (`job_id`, `job_name`, `tenant`), so a PromQL query or alert rule can't distinguish real jobs from simulated ones.
+The real Flink metrics are scraped directly. The **fleet-exporter** (`services/fleet-exporter`) is the simulated fleet's relay. It consumes `fleet.telemetry` and keeps each job's state, behaving as Flink and the collector would for a real job:
+- each deploy starts a new run, with a new Flink job ID and its counters reset;
+- a failure is a `RESTARTING` event plus Flink's WARN log;
+- no checkpoints are taken while the job is down, and a checkpoint over the 30 s timeout expires;
+- the input backs up while the job is down and drains afterwards.
 
-The curated metric set covers restarts, uptime, last checkpoint duration and size, failed checkpoints, backpressure time, busy time, records in/out rates, and Kafka consumer lag. The exact names will be taken from a real scrape before the fleet schema is written.
+From that state it:
+- publishes the `platform.*` events (registry, deployments, status, checkpoints, logs);
+- serves `/metrics` on `:9249` with the curated metrics of [flink-metrics.md](flink-metrics.md). They use Flink's names, label sets and label-value rewriting: `job_id`, `job_name` and `host`, plus the task, operator and TaskManager labels where Flink has them.
 
-About 1,000 jobs × about 15 series is roughly 15k series, which Prometheus handles easily.
+Prometheus scrapes it as one more target of the `flink` job, so a PromQL query or alert rule can't tell real jobs from simulated ones. There's no `tenant` label, because real Flink series don't have one; the collector adds the tenant to alerts from the registry. `make fleet-test` checks that each curated metric has one label set across real and simulated series.
+
+About 1,000 jobs × about 25 series is roughly 25k series, which Prometheus handles easily.
 
 ### 5.3 Alerting
 
-Prometheus alert rules (high restarts, checkpoint failures, checkpoint duration over baseline, lag growth, backpressure, job not running) feed Alertmanager. Alertmanager sends to the collector's webhook, which publishes to `platform.alerts`.
+Prometheus alert rules (`observability/prometheus/rules/flink-jobs.yml`) feed Alertmanager. The rules are `FlinkJobRestarted`, `FlinkJobNotRunning`, `FlinkCheckpointFailed`, `FlinkCheckpointSlow`, `FlinkConsumerLagHigh` and `FlinkBackpressure`. Alertmanager groups by alert and job and sends everything, firing and resolved, to the collector's webhook, which publishes to `platform.alerts`.
 
 The rules are **deliberately naive**, the kind of static thresholds every platform starts with, so the fleet produces a realistic stream of false positives. That stream is shown raw in `#platform-alerts` in Mattermost: this is the "before" picture.
 
@@ -325,6 +336,14 @@ Noise that Scenario 1 should suppress or group:
 - Alert storms: one underlying problem firing five rules at once. These should be grouped, not counted five times.
 
 A few genuine fleet problems (e.g. a simulated job in a slow crash loop with nobody watching) must show up as signals alongside F1–F4.
+
+In the fleet (`shadowtraffic/fleet/generate.py`), each job has one profile:
+- **steady** jobs have the first, second and fourth patterns above. Half of their deploys restart once, a TaskManager loss also fails the checkpoint in flight (a small storm), and there are occasional slow or expired checkpoints;
+- **peaky** jobs add lag peaks with backpressure that drain;
+- **flappers** fail with the same benign exception every few minutes;
+- the **genuine** jobs, a few minutes in, start a crash loop, a stalled consumer (lag grows, no errors) or growing state (checkpoints slow down until they expire, and heap climbs).
+
+With 200 local jobs the naive rules fire a few alerts a minute, and genuine problems are a small minority of them.
 
 ## 8. Scenarios
 
@@ -415,7 +434,7 @@ crates/
 services/
   Dockerfile                # one image for every service; the command picks the binary
   collector/                # Flink REST poller, Alertmanager webhook, log intake, Kafka→Postgres
-  fleet-exporter/
+  fleet-exporter/           # fleet.telemetry → platform.* events + Flink-identical /metrics
   cicd-sim/                 # versioned deploys and rollbacks (jobs/versions.yaml)
   tickets/
   chatops-bot/              # Mattermost bot + Claude Code bridge
@@ -430,7 +449,8 @@ jobs/
   versions.yaml             # cicd-sim version catalogue
 shadowtraffic/
   inputs.json  fleet.json  faults/*.json
-observability/              # Prometheus rules, Alertmanager, Grafana, Vector configs
+  fleet/                    # generate.py → fleet.json and the cloud/local rosters
+observability/              # Prometheus (+ alert rules), Alertmanager, Grafana, Vector configs
 infra/cloudformation/demo.yaml
 docs/
 ```

@@ -1,0 +1,302 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "FleetEvent",
+  "type": "object",
+  "properties": {
+    "author": {
+      "type": "string"
+    },
+    "base_rate": {
+      "description": "Normal input rate, records per second.",
+      "type": "number",
+      "format": "double"
+    },
+    "cluster": {
+      "description": "The fleet cluster running the job; its JobManager's host name.",
+      "type": "string"
+    },
+    "first_deployed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "heap_max_bytes": {
+      "type": "number",
+      "format": "double"
+    },
+    "input_topic": {
+      "type": "string"
+    },
+    "job_name": {
+      "type": "string"
+    },
+    "kind": {
+      "$ref": "#/$defs/JobKind"
+    },
+    "max_parallelism": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "owner": {
+      "type": "string"
+    },
+    "parallelism": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "sink_table": {
+      "type": "string"
+    },
+    "tenant": {
+      "type": "string"
+    },
+    "tier": {
+      "$ref": "#/$defs/Tier"
+    },
+    "version": {
+      "description": "The version running when the simulation starts.",
+      "type": "string"
+    }
+  },
+  "oneOf": [
+    {
+      "description": "Task gauges, sampled every tick while the job runs.",
+      "type": "object",
+      "properties": {
+        "backpressured_ms_per_sec": {
+          "type": "number",
+          "format": "double"
+        },
+        "busy_ms_per_sec": {
+          "type": "number",
+          "format": "double"
+        },
+        "event": {
+          "type": "string",
+          "const": "metrics"
+        },
+        "heap_used_ratio": {
+          "type": "number",
+          "format": "double"
+        },
+        "pending_records": {
+          "description": "Consumer lag from the input, not counting backlog the exporter\nadds while the job is down.",
+          "type": "number",
+          "format": "double"
+        },
+        "records_in_per_sec": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "event",
+        "records_in_per_sec",
+        "busy_ms_per_sec",
+        "backpressured_ms_per_sec",
+        "pending_records",
+        "heap_used_ratio"
+      ]
+    },
+    {
+      "description": "A checkpoint finished. One that takes longer than the 30 s checkpoint\ntimeout is reported as failed (expired).",
+      "type": "object",
+      "properties": {
+        "duration_ms": {
+          "type": "number",
+          "format": "double"
+        },
+        "event": {
+          "type": "string",
+          "const": "checkpoint"
+        },
+        "failed": {
+          "type": "boolean",
+          "default": false
+        },
+        "failure_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "size_bytes": {
+          "type": "number",
+          "format": "double"
+        },
+        "state_size_bytes": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "event",
+        "duration_ms",
+        "size_bytes",
+        "state_size_bytes"
+      ]
+    },
+    {
+      "description": "The job failed and is restarting.",
+      "type": "object",
+      "properties": {
+        "event": {
+          "type": "string",
+          "const": "failure"
+        },
+        "failure": {
+          "$ref": "#/$defs/FleetFailure"
+        }
+      },
+      "required": [
+        "event",
+        "failure"
+      ]
+    },
+    {
+      "description": "The job is running again after a failure.",
+      "type": "object",
+      "properties": {
+        "event": {
+          "type": "string",
+          "const": "recovered"
+        }
+      },
+      "required": [
+        "event"
+      ]
+    },
+    {
+      "description": "A new version was deployed.",
+      "type": "object",
+      "properties": {
+        "commit_sha": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string",
+          "const": "deploy"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "event",
+        "summary",
+        "commit_sha"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "event": {
+          "type": "string",
+          "const": "log"
+        },
+        "level": {
+          "$ref": "#/$defs/LogLevel"
+        },
+        "logger": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "event",
+        "level",
+        "logger",
+        "message"
+      ]
+    }
+  ],
+  "required": [
+    "job_name",
+    "tenant",
+    "owner",
+    "tier",
+    "kind",
+    "max_parallelism",
+    "parallelism",
+    "cluster",
+    "input_topic",
+    "sink_table",
+    "first_deployed_at",
+    "version",
+    "author",
+    "base_rate",
+    "heap_max_bytes"
+  ],
+  "$defs": {
+    "FleetFailure": {
+      "type": "object",
+      "properties": {
+        "exception_class": {
+          "type": "string"
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "root_cause_class": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "root_cause_message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "exception_class"
+      ]
+    },
+    "JobKind": {
+      "type": "string",
+      "enum": [
+        "java",
+        "sql"
+      ]
+    },
+    "LogLevel": {
+      "type": "string",
+      "enum": [
+        "TRACE",
+        "DEBUG",
+        "INFO",
+        "WARN",
+        "ERROR",
+        "FATAL"
+      ]
+    },
+    "Tier": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "tier2"
+          ]
+        },
+        {
+          "description": "Business-critical: pages someone.",
+          "type": "string",
+          "const": "tier1"
+        },
+        {
+          "description": "Best effort.",
+          "type": "string",
+          "const": "tier3"
+        }
+      ]
+    }
+  }
+}
