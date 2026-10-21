@@ -1,2 +1,4 @@
 .env
 .DS_Store
+jobs/java/target/
+shadowtraffic/license.env

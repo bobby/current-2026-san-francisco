@@ -1,0 +1,11 @@
+# The `lake` Iceberg catalog for the local runtime: the Iceberg REST catalog
+# with tables on RustFS. S3 credentials come from AWS_* environment variables
+# on the Flink containers, so this file holds no secrets.
+type: iceberg
+catalog-type: rest
+uri: http://iceberg-rest:8181
+warehouse: s3://warehouse/
+io-impl: org.apache.iceberg.aws.s3.S3FileIO
+s3.endpoint: http://s3:9000
+s3.path-style-access: "true"
+client.region: us-east-1

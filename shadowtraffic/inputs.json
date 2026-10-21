@@ -1,0 +1,541 @@
+{
+  "generators": [
+    {
+      "name": "payments",
+      "topic": "payments",
+      "vars": {
+        "account": {
+          "_gen": "string",
+          "expr": "ACC-#{Number.numberBetween '1000','1100'}"
+        }
+      },
+      "key": {
+        "_gen": "var",
+        "var": "account"
+      },
+      "value": {
+        "payment_id": {
+          "_gen": "uuid"
+        },
+        "account_id": {
+          "_gen": "var",
+          "var": "account"
+        },
+        "amount": {
+          "_gen": "weightedOneOf",
+          "choices": [
+            {
+              "weight": 90,
+              "value": {
+                "_gen": "normalDistribution",
+                "mean": 120,
+                "sd": 80,
+                "clamp": [
+                  1,
+                  2500
+                ],
+                "decimals": 2
+              }
+            },
+            {
+              "weight": 10,
+              "value": {
+                "_gen": "normalDistribution",
+                "mean": 6000,
+                "sd": 4000,
+                "clamp": [
+                  2500,
+                  50000
+                ],
+                "decimals": 2
+              }
+            }
+          ]
+        },
+        "currency": {
+          "_gen": "weightedOneOf",
+          "choices": [
+            {
+              "weight": 70,
+              "value": "USD"
+            },
+            {
+              "weight": 12,
+              "value": "EUR"
+            },
+            {
+              "weight": 8,
+              "value": "GBP"
+            },
+            {
+              "weight": 4,
+              "value": "JPY"
+            },
+            {
+              "weight": 4,
+              "value": "CAD"
+            },
+            {
+              "weight": 2,
+              "value": "CHF"
+            }
+          ]
+        },
+        "merchant": {
+          "id": {
+            "_gen": "string",
+            "expr": "MER-#{Number.numberBetween '10000','10500'}"
+          },
+          "name": {
+            "_gen": "string",
+            "expr": "#{Company.name}"
+          },
+          "category": {
+            "_gen": "oneOf",
+            "choices": [
+              "grocery",
+              "travel",
+              "dining",
+              "electronics",
+              "utilities",
+              "healthcare",
+              "entertainment",
+              "fuel",
+              "apparel"
+            ],
+            "null": {
+              "rate": 0.03
+            }
+          }
+        },
+        "channel": {
+          "_gen": "oneOf",
+          "choices": [
+            "card_present",
+            "card_not_present",
+            "ach",
+            "wire",
+            "mobile_wallet"
+          ]
+        },
+        "created_at": {
+          "_gen": "now"
+        }
+      },
+      "localConfigs": {
+        "throttleMs": 100
+      }
+    },
+    {
+      "name": "trade-events",
+      "topic": "trade-events",
+      "vars": {
+        "account": {
+          "_gen": "string",
+          "expr": "ACC-#{Number.numberBetween '1000','1100'}"
+        }
+      },
+      "key": {
+        "_gen": "var",
+        "var": "account"
+      },
+      "value": {
+        "trade_id": {
+          "_gen": "uuid"
+        },
+        "account_id": {
+          "_gen": "var",
+          "var": "account"
+        },
+        "instrument": {
+          "_gen": "oneOf",
+          "choices": [
+            "AAPL",
+            "MSFT",
+            "NVDA",
+            "AMZN",
+            "GOOGL",
+            "JPM",
+            "GS",
+            "XOM",
+            "TSLA",
+            "META",
+            "BRK.B",
+            "V",
+            "UNH",
+            "JNJ",
+            "WMT"
+          ]
+        },
+        "side": {
+          "_gen": "oneOf",
+          "choices": [
+            "BUY",
+            "SELL"
+          ]
+        },
+        "quantity": {
+          "_gen": "normalDistribution",
+          "mean": 300,
+          "sd": 250,
+          "clamp": [
+            1,
+            5000
+          ],
+          "decimals": 0
+        },
+        "price": {
+          "_gen": "uniformDistribution",
+          "bounds": [
+            20,
+            900
+          ],
+          "decimals": 2
+        },
+        "venue": {
+          "_gen": "oneOf",
+          "choices": [
+            "XNYS",
+            "XNAS",
+            "ARCX",
+            "BATS",
+            "IEXG"
+          ]
+        },
+        "executed_at": {
+          "_gen": "now"
+        }
+      },
+      "localConfigs": {
+        "throttleMs": 50
+      }
+    },
+    {
+      "name": "trade-fills",
+      "topic": "trade-fills",
+      "vars": {
+        "account": {
+          "_gen": "string",
+          "expr": "ACC-#{Number.numberBetween '1000','1100'}"
+        }
+      },
+      "key": {
+        "_gen": "var",
+        "var": "account"
+      },
+      "value": {
+        "fill_id": {
+          "_gen": "uuid"
+        },
+        "account_id": {
+          "_gen": "var",
+          "var": "account"
+        },
+        "instrument": {
+          "_gen": "oneOf",
+          "choices": [
+            "AAPL",
+            "MSFT",
+            "NVDA",
+            "AMZN",
+            "GOOGL",
+            "JPM",
+            "GS",
+            "XOM",
+            "TSLA",
+            "META",
+            "BRK.B",
+            "V",
+            "UNH",
+            "JNJ",
+            "WMT"
+          ]
+        },
+        "side": {
+          "_gen": "oneOf",
+          "choices": [
+            "BUY",
+            "SELL"
+          ]
+        },
+        "quantity": {
+          "_gen": "normalDistribution",
+          "mean": 100,
+          "sd": 80,
+          "clamp": [
+            1,
+            2000
+          ],
+          "decimals": 0
+        },
+        "price": {
+          "_gen": "uniformDistribution",
+          "bounds": [
+            20,
+            900
+          ],
+          "decimals": 2
+        },
+        "filled_at": {
+          "_gen": "now"
+        }
+      },
+      "localConfigs": {
+        "throttleMs": 50
+      }
+    },
+    {
+      "name": "market-data",
+      "topic": "market-data",
+      "vars": {
+        "symbol": {
+          "_gen": "oneOf",
+          "choices": [
+            "AAPL",
+            "MSFT",
+            "NVDA",
+            "AMZN",
+            "GOOGL",
+            "JPM",
+            "GS",
+            "XOM",
+            "TSLA",
+            "META",
+            "BRK.B",
+            "V",
+            "UNH",
+            "JNJ",
+            "WMT"
+          ]
+        },
+        "mid": {
+          "_gen": "uniformDistribution",
+          "bounds": [
+            20,
+            900
+          ],
+          "decimals": 2
+        },
+        "half_spread": {
+          "_gen": "uniformDistribution",
+          "bounds": [
+            0.01,
+            0.25
+          ],
+          "decimals": 2
+        }
+      },
+      "key": {
+        "_gen": "var",
+        "var": "symbol"
+      },
+      "value": {
+        "symbol": {
+          "_gen": "var",
+          "var": "symbol"
+        },
+        "venue": {
+          "_gen": "oneOf",
+          "choices": [
+            "XNYS",
+            "XNAS",
+            "ARCX",
+            "BATS",
+            "IEXG"
+          ]
+        },
+        "bid": {
+          "_gen": "subtract",
+          "args": [
+            {
+              "_gen": "var",
+              "var": "mid"
+            },
+            {
+              "_gen": "var",
+              "var": "half_spread"
+            }
+          ],
+          "decimals": 2
+        },
+        "ask": {
+          "_gen": "add",
+          "args": [
+            {
+              "_gen": "var",
+              "var": "mid"
+            },
+            {
+              "_gen": "var",
+              "var": "half_spread"
+            }
+          ],
+          "decimals": 2
+        },
+        "last": {
+          "_gen": "var",
+          "var": "mid"
+        },
+        "size": {
+          "_gen": "normalDistribution",
+          "mean": 400,
+          "sd": 300,
+          "clamp": [
+            1,
+            10000
+          ],
+          "decimals": 0
+        },
+        "ts": {
+          "_gen": "now"
+        }
+      },
+      "localConfigs": {
+        "throttleMs": 20
+      }
+    },
+    {
+      "name": "customer-events",
+      "topic": "customer-events",
+      "vars": {
+        "customer": {
+          "_gen": "string",
+          "expr": "CUST-#{Number.numberBetween '100000','120000'}"
+        }
+      },
+      "key": {
+        "_gen": "var",
+        "var": "customer"
+      },
+      "value": {
+        "event_id": {
+          "_gen": "uuid"
+        },
+        "customer_id": {
+          "_gen": "var",
+          "var": "customer"
+        },
+        "event_type": {
+          "_gen": "weightedOneOf",
+          "choices": [
+            {
+              "weight": 50,
+              "value": "page_view"
+            },
+            {
+              "weight": 20,
+              "value": "login"
+            },
+            {
+              "weight": 10,
+              "value": "search"
+            },
+            {
+              "weight": 8,
+              "value": "statement_download"
+            },
+            {
+              "weight": 7,
+              "value": "transfer_initiated"
+            },
+            {
+              "weight": 5,
+              "value": "support_contact"
+            }
+          ]
+        },
+        "channel": {
+          "_gen": "oneOf",
+          "choices": [
+            "web",
+            "ios",
+            "android",
+            "branch",
+            "call_center"
+          ]
+        },
+        "session_id": {
+          "_gen": "uuid"
+        },
+        "ts": {
+          "_gen": "now"
+        }
+      },
+      "localConfigs": {
+        "throttleMs": 100
+      }
+    },
+    {
+      "name": "audit-log",
+      "topic": "audit-log",
+      "vars": {
+        "actor": {
+          "_gen": "string",
+          "expr": "#{Internet.username}"
+        }
+      },
+      "key": {
+        "_gen": "var",
+        "var": "actor"
+      },
+      "value": {
+        "audit_id": {
+          "_gen": "uuid"
+        },
+        "actor": {
+          "_gen": "var",
+          "var": "actor"
+        },
+        "action": {
+          "_gen": "oneOf",
+          "choices": [
+            "read",
+            "update",
+            "delete",
+            "export",
+            "grant_access",
+            "revoke_access",
+            "login"
+          ]
+        },
+        "resource": {
+          "_gen": "string",
+          "expr": "#{Internet.slug}"
+        },
+        "outcome": {
+          "_gen": "weightedOneOf",
+          "choices": [
+            {
+              "weight": 95,
+              "value": "allowed"
+            },
+            {
+              "weight": 5,
+              "value": "denied"
+            }
+          ]
+        },
+        "source_ip": {
+          "_gen": "string",
+          "expr": "#{Internet.privateIpV4Address}"
+        },
+        "ts": {
+          "_gen": "now"
+        }
+      },
+      "localConfigs": {
+        "throttleMs": 200
+      }
+    }
+  ],
+  "connections": {
+    "kafka": {
+      "kind": "kafka",
+      "producerConfigs": {
+        "bootstrap.servers": "kafka:9092",
+        "key.serializer": "org.apache.kafka.common.serialization.StringSerializer",
+        "value.serializer": "io.shadowtraffic.kafka.serdes.JsonSerializer"
+      }
+    }
+  }
+}

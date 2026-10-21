@@ -12,8 +12,14 @@ name: platform
 x-flink: &flink
   build: ./flink
   image: platform/flink:2.1.2
+  volumes:
+    - ./flink/catalogs/local:/opt/flink/catalogs:ro
   environment: &flink-env
     JOB_MANAGER_RPC_ADDRESS: jobmanager
+    # Credentials for Iceberg's S3FileIO (the lake catalog).
+    AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY:-platform}
+    AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:-platform-secret}
+    AWS_REGION: us-east-1
     FLINK_PROPERTIES: |
       s3.endpoint: ${S3_ENDPOINT:-http://s3:9000}
       s3.access-key: ${S3_ACCESS_KEY:-platform}
@@ -23,6 +29,8 @@ x-flink: &flink
   depends_on:
     bucket-init:
       condition: service_completed_successfully
+    iceberg-rest:
+      condition: service_healthy
 
 services:
   kafka:
@@ -177,6 +185,23 @@ services:
       retries: 30
     depends_on:
       jobmanager:
+        condition: service_healthy
+
+  # Steady, seeded input data for the real jobs' topics (docs/design.md §4.4).
+  st-inputs:
+    image: shadowtraffic/shadowtraffic:2.3.1
+    command: ["--config", "/config/inputs.json", "--seed", "${ST_INPUTS_SEED:-20261020}"]
+    env_file:
+      # Not committed; `make up` checks it exists. See shadowtraffic/license.env.example.
+      - path: shadowtraffic/license.env
+        required: false
+    environment:
+      JAVA_TOOL_OPTIONS: -Xmx512m
+    volumes:
+      - ./shadowtraffic:/config:ro
+    mem_limit: 1g
+    depends_on:
+      kafka:
         condition: service_healthy
 
   postgres:

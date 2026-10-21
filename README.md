@@ -30,12 +30,23 @@ AWS infrastructure is defined in CloudFormation (`infra/cloudformation/`). Both 
 
 #### Running Locally
 
-You need Docker Desktop (or another Docker engine with Compose v2), `make`, `curl` and `jq`.
+You need Docker Desktop (or another Docker engine with Compose v2), `make`, `curl` and `jq`. You also need a [ShadowTraffic license](https://shadowtraffic.io/pricing.html): copy `shadowtraffic/license.env.example` to `shadowtraffic/license.env` and fill it in.
 
 ```sh
-make up      # build and start the platform; waits until it's healthy (~20 s warm)
-make smoke   # end-to-end check: Flink job → S3 checkpoint → Prometheus, Iceberg, Kafka, Postgres
-make down    # stop (keep data); `make clean` also deletes volumes
+make up           # build and start the platform; waits until it's healthy (~20 s warm)
+make smoke        # end-to-end check: Flink job → S3 checkpoint → Prometheus, Iceberg, Kafka, Postgres
+make jobs-submit  # build the Java jobs jar and submit all six jobs
+make jobs-test    # every job commits to Iceberg; every fault fails as designed (a few minutes)
+make down         # stop (keep data); `make clean` also deletes volumes
+```
+
+To deploy a single job by hand, with or without a fault, use `scripts/jobs.sh`:
+
+```sh
+scripts/jobs.sh submit payments-enrichment --fault=npe-on-null-field
+scripts/jobs.sh submit trade-events-ingest --on-deser-error=dlq
+scripts/jobs.sh list
+scripts/jobs.sh cancel positions-aggregator
 ```
 
 Then open the Flink UI at http://localhost:8081, Prometheus at http://localhost:9090, and the RustFS console at http://localhost:9001. Copy `.env.example` to `.env` to override the defaults.

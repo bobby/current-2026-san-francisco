@@ -149,7 +149,18 @@ All Java jobs come from **one jar** with a `--job=<name>` entry point and **faul
 
 SQL jobs are submitted as SQL scripts through the SQL Gateway REST API.
 
-All jobs read Kafka topics and write Iceberg tables (`<tenant>.<table>` in Glue).
+All jobs read Kafka topics and write Iceberg tables through the `lake` catalog. Table names are `<tenant>.<table>`, with the tenant written in snake_case (e.g. `payments_eng.payments_enriched`).
+
+| Job | Input topic | Iceberg table |
+|---|---|---|
+| `payments-enrichment` | `payments` | `payments_eng.payments_enriched` |
+| `trade-events-ingest` | `trade-events` (DLQ: `trade-events.dlq`) | `trading_data.trade_events` |
+| `positions-aggregator` | `trade-fills` | `risk_platform.positions` |
+| `market-data-to-iceberg` | `market-data` | `market_data.quotes` |
+| `customer-events-to-iceberg` | `customer-events` | `customer_360.customer_events` |
+| `audit-log-archiver` | `audit-log` | `compliance_eng.audit_log` |
+
+The Java jobs reach Kafka and Iceberg through the Table API, using the same cluster-provided connectors as the SQL jobs. Only their parsing and stateful processing is DataStream code. The real metric names these jobs report are listed in [flink-metrics.md](flink-metrics.md).
 
 ### 4.3 CI/CD simulator (`cicd-sim`)
 
