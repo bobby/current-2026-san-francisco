@@ -178,6 +178,13 @@ Resources:
       RepositoryName: !Sub "${AWS::StackName}/services"
       EmptyOnDelete: true
 
+  # Mattermost, built for arm64 from the official release (mattermost/).
+  MattermostRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "${AWS::StackName}/mattermost"
+      EmptyOnDelete: true
+
   InstanceRole:
     Type: AWS::IAM::Role
     Properties:
@@ -297,6 +304,8 @@ Outputs:
     Value: !GetAtt FlinkRepository.RepositoryUri
   ServicesRepositoryUri:
     Value: !GetAtt ServicesRepository.RepositoryUri
+  MattermostRepositoryUri:
+    Value: !GetAtt MattermostRepository.RepositoryUri
   ParameterPrefix:
     Description: SSM Parameter Store prefix for the demo's secrets.
     Value: !Sub "/${AWS::StackName}/"

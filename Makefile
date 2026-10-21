@@ -1,4 +1,4 @@
-.PHONY: up down clean ps logs smoke jobs jobs-submit jobs-cancel jobs-list jobs-test license rust-test telemetry-test cicd-test fleet-test \
+.PHONY: up down clean ps logs smoke jobs jobs-submit jobs-cancel jobs-list jobs-test license rust-test telemetry-test cicd-test fleet-test chatops-test \
 	stack-aws secrets-aws deploy-aws jobs-submit-aws ps-aws tunnel teardown-aws
 
 MAVEN_IMAGE := maven:3.9.16-eclipse-temurin-17
@@ -68,6 +68,11 @@ cicd-test: jobs
 # the naive alert rules fire on it (issue #5). Waits for alerts to build up.
 fleet-test:
 	./scripts/fleet-test.sh
+
+# Mattermost, the chatops-bot's cards and buttons, the tickets mock and
+# Grafana (issue #8).
+chatops-test:
+	./scripts/chatops-test.sh
 
 license:
 	@test -f shadowtraffic/license.env || { \
