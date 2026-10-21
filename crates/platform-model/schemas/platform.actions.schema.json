@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ActionEvent",
+  "description": "`platform.actions`: the audit log of every remediation proposed, approved,\nrejected or executed, by an agent, a human or cicd-sim.",
+  "type": "object",
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/ActionKind"
+    },
+    "action_id": {
+      "description": "Groups the events of one action (proposed → approved → executed).",
+      "type": "string",
+      "format": "uuid"
+    },
+    "actor": {
+      "description": "Who did it: `operator`, `chatops-bot`, `cicd-sim`, or `user:<name>`.",
+      "type": "string"
+    },
+    "event_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "incident_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
+    "job_name": {
+      "type": "string"
+    },
+    "params": true,
+    "phase": {
+      "$ref": "#/$defs/ActionPhase"
+    },
+    "rationale": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "signal_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
+    "ticket": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "event_id",
+    "ts",
+    "action_id",
+    "job_name",
+    "actor",
+    "action",
+    "phase",
+    "params"
+  ],
+  "$defs": {
+    "ActionKind": {
+      "type": "string",
+      "enum": [
+        "rollback_to_previous_version",
+        "restart_from_checkpoint",
+        "scale_up",
+        "redeploy",
+        "open_ticket",
+        "update_ticket",
+        "escalate_to_owner",
+        "escalate_to_platform",
+        "observe"
+      ]
+    },
+    "ActionPhase": {
+      "type": "string",
+      "enum": [
+        "proposed",
+        "approved",
+        "rejected",
+        "executed",
+        "failed",
+        "verified"
+      ]
+    }
+  }
+}

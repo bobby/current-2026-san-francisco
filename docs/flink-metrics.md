@@ -6,7 +6,7 @@ Flink reports about 370 `flink_*` series names. This is the curated subset the t
 
 ## Labels
 
-The Prometheus reporter **rewrites label values**: every character other than `[A-Za-z0-9_]` becomes `_`. For example:
+The Prometheus reporter **rewrites label values**: every character other than `[A-Za-z0-9:_]` becomes `_`. For example:
 
 - job `market-data-to-iceberg` → `job_name="market_data_to_iceberg"`
 - host `192.168.117.9` → `host="192_168_117_9"`

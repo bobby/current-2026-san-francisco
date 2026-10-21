@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AlertEvent",
+  "description": "`platform.alerts`: an alert firing or resolving, from Alertmanager.",
+  "type": "object",
+  "properties": {
+    "alertname": {
+      "type": "string"
+    },
+    "annotations": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "ends_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "event_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "fingerprint": {
+      "description": "Alertmanager's fingerprint: the same for every event of one alert.",
+      "type": "string"
+    },
+    "generator_url": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "job_name": {
+      "description": "The platform job name, if the alert is about one job.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "labels": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "severity": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "starts_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "status": {
+      "$ref": "#/$defs/AlertStatus"
+    },
+    "tenant": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ts": {
+      "description": "When the alert started firing (`firing`) or resolved (`resolved`).",
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "event_id",
+    "ts",
+    "status",
+    "alertname",
+    "fingerprint",
+    "starts_at",
+    "labels",
+    "annotations"
+  ],
+  "$defs": {
+    "AlertStatus": {
+      "type": "string",
+      "enum": [
+        "firing",
+        "resolved"
+      ]
+    }
+  }
+}

@@ -1,0 +1,35 @@
+# Ships the Flink containers' JSON logs (flink/conf/log-template.json) to the
+# collector, which adds the job name and publishes them to platform.logs
+# (docs/design.md §5.1). Only job-scoped warnings and errors are kept.
+
+sources:
+  flink:
+    type: docker_logs
+    # Set on the Flink containers in compose.yml.
+    include_labels: ["platform.logs=flink"]
+
+transforms:
+  job_logs:
+    type: remap
+    inputs: [flink]
+    drop_on_abort: true
+    source: |
+      parsed, err = parse_json(.message)
+      if err != null || !is_object(parsed) { abort }
+      parsed = object!(parsed)
+      if !exists(parsed.mdc."flink-job-id") { abort }
+      if !includes(["WARN", "ERROR", "FATAL"], parsed.level) { abort }
+      . = parsed
+
+sinks:
+  collector:
+    type: http
+    inputs: [job_logs]
+    uri: http://collector:8090/logs
+    method: post
+    encoding:
+      codec: json
+    framing:
+      method: newline_delimited
+    batch:
+      timeout_secs: 1

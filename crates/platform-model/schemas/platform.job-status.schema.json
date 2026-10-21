@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "JobStatusEvent",
+  "description": "`platform.job-status`: a job's state transitions and failures. A failure\nthat triggers a restart is one event, with `failure` set and `status`\n`RESTARTING` (or `FAILED` once restarts are exhausted).",
+  "type": "object",
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "failure": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Failure"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "flink_job_id": {
+      "type": "string"
+    },
+    "job_name": {
+      "type": "string"
+    },
+    "previous_status": {
+      "description": "The state before this transition, if known.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JobState"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "restarts": {
+      "description": "Restarts of this run so far (Flink's `numRestarts`).",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "status": {
+      "$ref": "#/$defs/JobState"
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "event_id",
+    "ts",
+    "job_name",
+    "flink_job_id",
+    "status",
+    "restarts"
+  ],
+  "$defs": {
+    "Failure": {
+      "description": "The exception behind a failure.",
+      "type": "object",
+      "properties": {
+        "exception_class": {
+          "description": "Class of the top-level exception, e.g. `java.io.IOException`.",
+          "type": "string"
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "root_cause_class": {
+          "description": "Class of the innermost `Caused by:` exception, which usually names the\nreal problem (e.g. `java.lang.NullPointerException`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "root_cause_message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "stack_head": {
+          "description": "The first lines of the stack trace.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "task": {
+          "description": "The task that failed, if the failure was in a task.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "exception_class"
+      ]
+    },
+    "JobState": {
+      "description": "Flink job states, as the REST API reports them.",
+      "type": "string",
+      "enum": [
+        "INITIALIZING",
+        "CREATED",
+        "RUNNING",
+        "FAILING",
+        "FAILED",
+        "CANCELLING",
+        "CANCELED",
+        "FINISHED",
+        "RESTARTING",
+        "SUSPENDED",
+        "RECONCILING"
+      ]
+    }
+  }
+}

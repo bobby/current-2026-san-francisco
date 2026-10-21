@@ -1,4 +1,4 @@
-.PHONY: up down clean ps logs smoke jobs jobs-submit jobs-cancel jobs-list jobs-test license \
+.PHONY: up down clean ps logs smoke jobs jobs-submit jobs-cancel jobs-list jobs-test license rust-test telemetry-test \
 	stack-aws secrets-aws deploy-aws jobs-submit-aws ps-aws tunnel teardown-aws
 
 MAVEN_IMAGE := maven:3.9.16-eclipse-temurin-17
@@ -45,6 +45,17 @@ jobs-list:
 # (issue #2). Takes a few minutes.
 jobs-test: jobs
 	./scripts/jobs-test.sh
+
+# Rust unit tests, plus the ops DB tests against the local stack's Postgres
+# (each gets a throwaway database). Needs a Rust toolchain.
+rust-test:
+	DATABASE_URL=postgres://postgres:$${POSTGRES_PASSWORD:-postgres}@localhost:5432/postgres \
+		cargo test --workspace -- --include-ignored
+
+# Real Flink activity reaches the platform.* topics and the ops DB; alerts,
+# logs and point-in-time queries work (issue #4).
+telemetry-test: jobs
+	./scripts/telemetry-test.sh
 
 license:
 	@test -f shadowtraffic/license.env || { \

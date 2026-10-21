@@ -37,6 +37,8 @@ make up           # build and start the platform; waits until it's healthy (~20 
 make smoke        # end-to-end check: Flink job → S3 checkpoint → Prometheus, Iceberg, Kafka, Postgres
 make jobs-submit  # build the Java jobs jar and submit all six jobs
 make jobs-test    # every job commits to Iceberg; every fault fails as designed (a few minutes)
+make telemetry-test  # job status, checkpoints, logs and alerts reach Kafka and the ops DB
+make rust-test    # Rust unit tests and ops DB tests (needs a Rust toolchain)
 make down         # stop (keep data); `make clean` also deletes volumes
 ```
 

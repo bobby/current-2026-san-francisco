@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MetricSample",
+  "description": "`platform.metrics`: one simulated metric sample. Real metrics are scraped\nstraight from Flink by Prometheus; the fleet-exporter serves these with\nthe same names and labels (docs/flink-metrics.md).",
+  "type": "object",
+  "properties": {
+    "labels": {
+      "description": "Prometheus labels, with values rewritten as Flink's reporter does.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "name": {
+      "description": "A Flink metric name, e.g. `flink_jobmanager_job_numRestarts`.",
+      "type": "string"
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "value": {
+      "type": "number",
+      "format": "double"
+    }
+  },
+  "required": [
+    "ts",
+    "name",
+    "value",
+    "labels"
+  ]
+}

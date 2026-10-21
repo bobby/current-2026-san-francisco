@@ -25,6 +25,7 @@ STACK=${AWS_STACK:-current2026-demo}
 TEMPLATE=infra/cloudformation/demo.yaml
 REMOTE_DIR=/opt/platform
 LOCAL_FLINK_IMAGE=platform/flink:2.1.2
+LOCAL_SERVICES_IMAGE=platform/services:latest
 # Secrets read from the local .env, if set there, and written to the
 # instance's .env. The ShadowTraffic license is stored whole.
 ENV_SECRETS=(JEV_API_KEY ANTHROPIC_API_KEY MATTERMOST_BOT_TOKEN)
@@ -122,19 +123,26 @@ secrets() {
   done
 }
 
+# push_image <local image> <repository URI>: tags and pushes a local image,
+# keeping its tag, and prints the pushed name.
+push_image() {
+  local image=$2:${1##*:}
+  docker tag "$1" "$image"
+  docker push --quiet "$image" >/dev/null
+  echo "$image"
+}
+
 deploy() {
-  local bucket registry repo key image
+  local bucket registry key image services_image
   bucket=$(output BucketName)
   registry=$(output Registry)
-  repo=$(output FlinkRepositoryUri)
-  image=$repo:${LOCAL_FLINK_IMAGE##*:}
   [[ -f jobs/java/target/platform-jobs.jar ]] || die "jar not built; run 'make jobs'"
 
-  log "Building and pushing $image"
-  DOCKER_DEFAULT_PLATFORM=linux/arm64 docker compose build jobmanager
-  docker tag "$LOCAL_FLINK_IMAGE" "$image"
+  log "Building and pushing images"
+  DOCKER_DEFAULT_PLATFORM=linux/arm64 docker compose build jobmanager collector
   aws ecr get-login-password | docker login --username AWS --password-stdin "$registry" >/dev/null
-  docker push --quiet "$image"
+  image=$(push_image "$LOCAL_FLINK_IMAGE" "$(output FlinkRepositoryUri)")
+  services_image=$(push_image "$LOCAL_SERVICES_IMAGE" "$(output ServicesRepositoryUri)")
 
   log "Uploading the Compose bundle"
   key=bundles/$(date -u +%Y%m%dT%H%M%SZ).tgz
@@ -156,6 +164,7 @@ aws ssm get-parameter --name /$STACK/shadowtraffic/license.env --with-decryption
   echo AWS_REGION=$AWS_REGION
   echo S3_BUCKET=$bucket
   echo FLINK_IMAGE=$image
+  echo SERVICES_IMAGE=$services_image
   aws ssm get-parameters-by-path --path /$STACK/env/ --with-decryption \
     --query 'Parameters[].[Name, Value]' --output text |
     awk -F '\t' '{ sub(/.*\//, "", \$1); print \$1 "=" \$2 }'

@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Deployment",
+  "description": "`platform.deployments`: one event per deploy or rollback (docs/design.md §4.3).",
+  "type": "object",
+  "properties": {
+    "author": {
+      "type": "string"
+    },
+    "commit_sha": {
+      "type": "string"
+    },
+    "event_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "flink_job_id": {
+      "description": "Flink job ID of the new run, once submitted.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "from_version": {
+      "description": "The version that was running before, if any.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "job_name": {
+      "type": "string"
+    },
+    "kind": {
+      "$ref": "#/$defs/DeploymentKind"
+    },
+    "outcome": {
+      "$ref": "#/$defs/DeploymentOutcome"
+    },
+    "restored_from": {
+      "description": "Savepoint or retained checkpoint the new run started from.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "summary": {
+      "description": "The change summary from the version catalogue.",
+      "type": "string"
+    },
+    "tenant": {
+      "type": "string"
+    },
+    "to_version": {
+      "type": "string"
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "event_id",
+    "ts",
+    "job_name",
+    "tenant",
+    "kind",
+    "to_version",
+    "commit_sha",
+    "author",
+    "summary",
+    "outcome"
+  ],
+  "$defs": {
+    "DeploymentKind": {
+      "type": "string",
+      "enum": [
+        "deploy",
+        "rollback"
+      ]
+    },
+    "DeploymentOutcome": {
+      "type": "string",
+      "enum": [
+        "succeeded",
+        "failed"
+      ]
+    }
+  }
+}

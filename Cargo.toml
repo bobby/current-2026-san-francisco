@@ -1,0 +1,30 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "services/*"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.99"
+license = "Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+platform-model = { path = "crates/platform-model" }
+platform-clients = { path = "crates/platform-clients" }
+
+anyhow = "1.0.104"
+axum = "0.8.9"
+chrono = { version = "0.4.45", default-features = false, features = ["std", "clock", "serde"] }
+clap = { version = "4.6.7", features = ["derive", "env"] }
+humantime = "2.4.0"
+rdkafka = { version = "0.39.0", features = ["tokio"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"] }
+schemars = { version = "1.2.3", features = ["chrono04", "uuid1"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "postgres", "macros", "derive", "migrate", "chrono", "uuid", "json"] }
+thiserror = "2.0.21"
+tokio = { version = "1.54.0", features = ["macros", "rt-multi-thread", "signal", "time"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+uuid = { version = "1.28.0", features = ["v5", "serde"] }

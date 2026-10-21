@@ -55,6 +55,17 @@ submit() {
   retry 90 tasks_running "$job" || fail "$job did not start"
 }
 
+# submit_failing <job> [flags...]: (re)deploy a version that fails as soon as
+# it reads input. With st-inputs running it can fail before every task is
+# RUNNING, so don't wait for that; `jobs.sh submit` returns once Flink has
+# accepted the job.
+submit_failing() {
+  local job=$1
+  $JOBS cancel "$job" >/dev/null 2>&1 || true
+  retry 60 no_active_job "$job" || fail "$job did not cancel"
+  $JOBS submit "$@" >/dev/null
+}
+
 no_active_job() {
   ! curl -sf "$FLINK/jobs/overview" |
     jq -e --arg name "$1" '.jobs[] | select(.name == $name and (.state | IN("FINISHED", "CANCELED", "FAILED") | not))' >/dev/null
@@ -140,7 +151,7 @@ for row in "${TABLES[@]}"; do
 done
 
 step "F1: --fault=npe-on-null-field"
-submit payments-enrichment --fault=npe-on-null-field
+submit_failing payments-enrichment --fault=npe-on-null-field
 payments 20 | produce payments
 retry 90 exception_seen payments-enrichment NullPointerException || fail "no NullPointerException"
 pass "NullPointerException on a payment with no merchant category"
