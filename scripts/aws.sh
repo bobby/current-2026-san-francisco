@@ -71,12 +71,16 @@ remote() {
   id=$(instance_id)
   params=$(mktemp)
   jq -n --arg script "$1" '{commands: ["set -euo pipefail", $script], executionTimeout: ["3600"]}' >"$params"
+  # Explicit checks, since callers may run this where `set -e` is off.
   cmd=$(aws ssm send-command --instance-ids "$id" --document-name AWS-RunShellScript \
-    --parameters "file://$params" --query Command.CommandId --output text)
+    --parameters "file://$params" --query Command.CommandId --output text) || cmd=""
   rm -f "$params"
+  [[ -n "$cmd" ]] || die "could not send a command to $id"
+  # The invocation can take a few seconds to appear after send-command.
+  local tries=0
   while :; do
     status=$(aws ssm get-command-invocation --command-id "$cmd" --instance-id "$id" \
-      --query Status --output text 2>/dev/null || echo Pending)
+      --query Status --output text 2>/dev/null) || { ((++tries < 20)) || die "lost command $cmd"; status=Pending; }
     case "$status" in Pending | InProgress | Delayed) sleep 3 ;; *) break ;; esac
   done
   aws ssm get-command-invocation --command-id "$cmd" --instance-id "$id" \
@@ -181,6 +185,10 @@ tunnel() {
 teardown() {
   local bucket
   bucket=$(output BucketName)
+  # Stop the jobs first, or they keep writing to the bucket while it's emptied.
+  log "Stopping the stack on the instance"
+  (remote "cd $REMOTE_DIR && docker compose down") >/dev/null 2>&1 ||
+    aws ec2 stop-instances --instance-ids "$(instance_id)" >/dev/null 2>&1 || true
   log "Emptying s3://$bucket"
   aws s3 rm --quiet --recursive "s3://$bucket"
   log "Deleting stack $STACK"

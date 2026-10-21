@@ -207,7 +207,7 @@ ShadowTraffic can also write Iceberg directly to Glue. We may use that to fill f
   - ECR repositories.
 
   It is deployed with `aws cloudformation deploy --profile evidentsystems`, wrapped by `make stack-aws`.
-- **Teardown**: `make teardown-aws` empties the bucket, deletes the stack (the ECR repositories are emptied on delete; the Glue databases drop their tables) and deletes the secrets. `scripts/aws.sh stop|start` stops the instance between rehearsals and keeps its data.
+- **Teardown**: `make teardown-aws` stops the stack on the instance (so the jobs stop writing), empties the bucket, deletes the stack (the ECR repositories are emptied on delete; the Glue databases drop their tables) and deletes the secrets. `scripts/aws.sh stop|start` stops the instance between rehearsals and keeps its data.
 
 ## 5. Telemetry plane
 
