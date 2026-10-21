@@ -64,8 +64,17 @@ checkpoints() {  # <jid> <n>: the run has completed at least n checkpoints
 
 restarts() { curl -sf "$FLINK/jobs/$1/metrics?get=numRestarts" | jq -r '.[0].value // "0"'; }
 
+# A table's record count from its latest snapshot: through the REST catalog
+# locally, or from the metadata file Glue points to on AWS.
 table_records() {
-  curl -sf "$CATALOG/v1/namespaces/$1/tables/$2" | jq -r '.metadata.snapshots[-1].summary["total-records"] // "0"'
+  local metadata
+  if curl -sf "$CATALOG/v1/config" >/dev/null 2>&1; then
+    metadata=$(curl -sf "$CATALOG/v1/namespaces/$1/tables/$2" | jq .metadata)
+  else
+    metadata=$(aws glue get-table --database-name "$1" --name "$2" \
+      --query 'Table.Parameters.metadata_location' --output text | xargs -I{} aws s3 cp --quiet {} -)
+  fi
+  jq -r '.snapshots[-1].summary["total-records"] // "0"' <<<"$metadata"
 }
 
 curl -sf "$CICD/health" >/dev/null || fail "cicd-sim isn't reachable; run 'make up'"
