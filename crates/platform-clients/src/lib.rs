@@ -2,5 +2,7 @@
 //! the agents and the MCP server.
 
 pub mod flink;
+pub mod kafka;
 pub mod ops_db;
+pub mod sql_gateway;
 pub mod stack_trace;

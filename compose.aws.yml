@@ -65,6 +65,10 @@ services:
     image: ${SERVICES_IMAGE:?}
     build: !reset null
 
+  cicd-sim:
+    image: ${SERVICES_IMAGE:?}
+    build: !reset null
+
   kafka:
     environment:
       KAFKA_HEAP_OPTS: -Xms1g -Xmx1g

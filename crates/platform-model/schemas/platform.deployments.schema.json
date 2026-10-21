@@ -4,6 +4,14 @@
   "description": "`platform.deployments`: one event per deploy or rollback (docs/design.md §4.3).",
   "type": "object",
   "properties": {
+    "args": {
+      "description": "Job arguments the version ran with (Java jobs), including any the\nrequest added, e.g. `--on-deser-error=dlq`.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
+    },
     "author": {
       "type": "string"
     },
@@ -13,6 +21,13 @@
     "event_id": {
       "type": "string",
       "format": "uuid"
+    },
+    "failure_reason": {
+      "description": "Why the deploy failed, if it did.",
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "flink_job_id": {
       "description": "Flink job ID of the new run, once submitted.",
@@ -54,6 +69,10 @@
     "to_version": {
       "type": "string"
     },
+    "triggered_by": {
+      "description": "Who asked for it: `director`, `operator`, `chatops-bot`, `user:<name>`.",
+      "type": "string"
+    },
     "ts": {
       "type": "string",
       "format": "date-time"
@@ -69,6 +88,7 @@
     "commit_sha",
     "author",
     "summary",
+    "triggered_by",
     "outcome"
   ],
   "$defs": {

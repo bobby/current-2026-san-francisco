@@ -9,6 +9,10 @@ use serde::Deserialize;
 pub enum Error {
     #[error("Flink REST request failed: {0}")]
     Http(#[from] reqwest::Error),
+    #[error("reading {path}: {source}")]
+    Io { path: String, source: std::io::Error },
+    #[error("Flink rejected the request: {0}")]
+    Rejected(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -56,6 +60,15 @@ pub struct CheckpointEntry {
     pub end_to_end_duration: u64,
     pub checkpointed_size: u64,
     pub state_size: u64,
+    pub external_path: Option<String>,
+}
+
+/// The outcome of an asynchronous savepoint (stop-with-savepoint).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SavepointStatus {
+    InProgress,
+    Completed { location: String },
+    Failed { cause: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -77,6 +90,16 @@ impl FlinkClient {
         Ok(self.http.get(url).send().await?.error_for_status()?.json().await?)
     }
 
+    async fn send<T: for<'de> Deserialize<'de>>(&self, request: reqwest::RequestBuilder) -> Result<T> {
+        let response = request.send().await?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::Rejected(format!("{status}: {body}")));
+        }
+        Ok(response.json().await?)
+    }
+
     /// Every job the cluster knows, including recently terminated ones.
     pub async fn jobs(&self) -> Result<Vec<JobOverview>> {
         #[derive(Deserialize)]
@@ -84,6 +107,97 @@ impl FlinkClient {
             jobs: Vec<JobOverview>,
         }
         Ok(self.get::<Overview>("/jobs/overview").await?.jobs)
+    }
+
+    /// The newest run of a job by name that hasn't terminated.
+    pub async fn active_job(&self, name: &str) -> Result<Option<JobOverview>> {
+        let mut jobs: Vec<JobOverview> =
+            self.jobs().await?.into_iter().filter(|j| j.name == name && !j.state.is_terminal()).collect();
+        jobs.sort_by_key(|j| std::cmp::Reverse(j.start_time));
+        Ok(jobs.into_iter().next())
+    }
+
+    /// A job's current state, if Flink knows it.
+    pub async fn job_state(&self, jid: &str) -> Result<Option<JobState>> {
+        Ok(self.jobs().await?.into_iter().find(|j| j.jid == jid).map(|j| j.state))
+    }
+
+    /// Uploads a jar and returns its ID for [`Self::run_jar`].
+    pub async fn upload_jar(&self, path: &std::path::Path) -> Result<String> {
+        #[derive(Deserialize)]
+        struct Uploaded {
+            filename: String,
+        }
+        let bytes =
+            tokio::fs::read(path).await.map_err(|source| Error::Io { path: path.display().to_string(), source })?;
+        let part = reqwest::multipart::Part::bytes(bytes)
+            .file_name(path.file_name().unwrap_or_default().to_string_lossy().into_owned())
+            .mime_str("application/x-java-archive")?;
+        let form = reqwest::multipart::Form::new().part("jarfile", part);
+        let uploaded: Uploaded =
+            self.send(self.http.post(format!("{}/jars/upload", self.base_url)).multipart(form)).await?;
+        Ok(uploaded.filename.rsplit('/').next().unwrap_or_default().to_string())
+    }
+
+    /// Runs an uploaded jar, optionally restoring from a savepoint or
+    /// retained checkpoint, and returns the new job's ID.
+    pub async fn run_jar(
+        &self,
+        jar_id: &str,
+        entry_class: &str,
+        args: &[String],
+        restore_from: Option<&str>,
+    ) -> Result<String> {
+        #[derive(Deserialize)]
+        struct Run {
+            jobid: String,
+        }
+        let body = serde_json::json!({
+            "entryClass": entry_class,
+            "programArgsList": args,
+            "savepointPath": restore_from,
+            "allowNonRestoredState": true,
+        });
+        let url = format!("{}/jars/{jar_id}/run", self.base_url);
+        Ok(self.send::<Run>(self.http.post(url).json(&body)).await?.jobid)
+    }
+
+    pub async fn delete_jar(&self, jar_id: &str) -> Result<()> {
+        self.http.delete(format!("{}/jars/{jar_id}", self.base_url)).send().await?.error_for_status()?;
+        Ok(())
+    }
+
+    /// Starts a stop-with-savepoint (to the cluster's default savepoint
+    /// directory) and returns the trigger ID for [`Self::savepoint_status`].
+    pub async fn stop_with_savepoint(&self, jid: &str) -> Result<String> {
+        #[derive(Deserialize)]
+        struct Trigger {
+            #[serde(rename = "request-id")]
+            request_id: String,
+        }
+        let url = format!("{}/jobs/{jid}/stop", self.base_url);
+        let trigger: Trigger = self.send(self.http.post(url).json(&serde_json::json!({"drain": false}))).await?;
+        Ok(trigger.request_id)
+    }
+
+    pub async fn savepoint_status(&self, jid: &str, trigger_id: &str) -> Result<SavepointStatus> {
+        let status: serde_json::Value = self.get(&format!("/jobs/{jid}/savepoints/{trigger_id}")).await?;
+        if status["status"]["id"] != "COMPLETED" {
+            return Ok(SavepointStatus::InProgress);
+        }
+        let operation = &status["operation"];
+        Ok(match operation["location"].as_str() {
+            Some(location) => SavepointStatus::Completed { location: location.to_string() },
+            None => {
+                let trace = operation["failure-cause"]["stack-trace"].as_str().unwrap_or("unknown failure");
+                SavepointStatus::Failed { cause: trace.lines().next().unwrap_or_default().to_string() }
+            }
+        })
+    }
+
+    pub async fn cancel(&self, jid: &str) -> Result<()> {
+        self.http.patch(format!("{}/jobs/{jid}?mode=cancel", self.base_url)).send().await?.error_for_status()?;
+        Ok(())
     }
 
     /// The job's recent failures, newest first.

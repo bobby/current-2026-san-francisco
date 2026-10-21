@@ -19,7 +19,9 @@ use platform_model::{AlertEvent, AlertStatus, LogEvent, LogLevel, event_id, topi
 use serde::Deserialize;
 use tracing::{info, warn};
 
-use crate::{jobs::JobNames, publisher::Publisher};
+use platform_clients::kafka::Publisher;
+
+use crate::jobs::JobNames;
 
 /// Longest log message kept; Flink's task names alone can run to kilobytes.
 const MAX_MESSAGE_CHARS: usize = 2000;

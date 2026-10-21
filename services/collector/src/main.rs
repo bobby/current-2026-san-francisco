@@ -13,7 +13,6 @@
 mod http;
 mod jobs;
 mod poller;
-mod publisher;
 mod sink;
 
 use std::{net::SocketAddr, time::Duration};
@@ -54,7 +53,7 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::parse();
 
     let db = connect_ops_db(&config.ops_database_url).await?;
-    let publisher = publisher::Publisher::new(&config.kafka_bootstrap_servers)?;
+    let publisher = platform_clients::kafka::Publisher::new(&config.kafka_bootstrap_servers, "collector")?;
     let flink = FlinkClient::new(&config.flink_url);
     let jobs = jobs::JobNames::new(flink.clone(), db.clone());
 

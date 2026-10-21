@@ -25,6 +25,13 @@
       "type": "string",
       "format": "uuid"
     },
+    "external_path": {
+      "description": "Where a completed checkpoint or savepoint is stored, for restoring\nfrom it (rollbacks).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "failure_reason": {
       "type": [
         "string",

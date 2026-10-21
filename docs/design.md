@@ -164,12 +164,22 @@ The Java jobs reach Kafka and Iceberg through the Table API, using the same clus
 
 ### 4.3 CI/CD simulator (`cicd-sim`)
 
-A Rust service that acts as the platform's deployment pipeline:
+A Rust service (`services/cicd-sim`) that acts as the platform's deployment pipeline:
 
-- A **version catalogue** (YAML in the repo) lists each job's versions: version number, commit SHA, author, change summary, and the jar or SQL plus flags.
-- **Deploy** = stop-with-savepoint on the running version (if any), then submit the new version from that savepoint, using `/jars/upload` + `/jars/:id/run` or SQL Gateway.
-- Emits a **`platform.deployments`** event for each deploy: job, from-version, to-version, SHA, author, summary, timestamp, outcome.
-- Exposes a small **HTTP API** (`POST /deploy`, `POST /rollback`) used by the director, the operator agent and approved Scenario 2 remediations. Rollbacks go through the same pipeline, so they produce deployment events too.
+- A **version catalogue** (`jobs/versions.yaml`) lists each job's versions: version number, commit SHA, author, change summary, and the job args (fault flags). It also gives each job's tenant, owner, tier, maximum parallelism and **baseline** version. cicd-sim re-reads it on every request.
+- **Deploy** = stop-with-savepoint on the running version (if any), then submit the new version from that savepoint. Java versions go through `/jars/upload` + `/jars/:id/run`; SQL versions go through the SQL Gateway with `execution.savepoint.path`. A deploy counts as succeeded once Flink starts the new run, even if it then crashes (F1).
+- **Restore points without a savepoint.** A restart-looping run can't take a savepoint, so cicd-sim cancels it. The new run restores from the newest restore point in the ops DB. Candidates are:
+  - completed savepoints;
+  - completed checkpoints of runs that didn't finish (Flink deletes a run's checkpoints when it finishes, e.g. after stop-with-savepoint);
+  - the restore points earlier deployments started from.
+- **Events.** Every deploy emits a **`platform.deployments`** event: job, tenant, from-version, to-version, SHA, author, summary, args, who triggered it, timestamp, outcome and restore point. It also updates the job's **`platform.jobs`** registry record. A request carrying an `action_id` also gets its outcome recorded in `platform.actions`.
+- **HTTP API.** It is used by the director, the operator agent and approved Scenario 2 remediations:
+  - `GET /catalogue`;
+  - `POST /deploy {job, version, args?}`. `args` adds job arguments without a new version, e.g. the F2 fix `--on-deser-error=dlq`;
+  - `POST /rollback {job, to_version?}`, which defaults to the version before the current one;
+  - `POST /baseline {jobs?}`.
+
+  Rollbacks go through the same pipeline, so they produce deployment events too. `scripts/cicd.sh` wraps the API.
 
 ShadowTraffic emits `platform.deployments` events for the simulated fleet in the same schema.
 
@@ -406,7 +416,7 @@ services/
   Dockerfile                # one image for every service; the command picks the binary
   collector/                # Flink REST poller, Alertmanager webhook, log intake, Kafka→Postgres
   fleet-exporter/
-  cicd-sim/
+  cicd-sim/                 # versioned deploys and rollbacks (jobs/versions.yaml)
   tickets/
   chatops-bot/              # Mattermost bot + Claude Code bridge
   mcp-server/               # rmcp

@@ -22,6 +22,12 @@ Jobs (`jobs/`; design doc §4.2):
 - `scripts/jobs.sh submit <job> [flags]` deploys one job by hand, e.g. `scripts/jobs.sh submit payments-enrichment --fault=npe-on-null-field`. Also `submit-all`, `cancel <job>|all` and `list`, wrapped by `make jobs-submit`, `make jobs-cancel` and `make jobs-list`.
 - `make jobs-test` (`scripts/jobs-test.sh`): checks that every job commits to Iceberg and that every fault fails as designed. It produces its own fixture records and takes a few minutes. Run it after changing `jobs/` or the Flink image.
 
+Versioned deploys go through **cicd-sim** (design doc §4.3; `jobs/versions.yaml` is the version catalogue):
+
+- `scripts/cicd.sh catalogue | deploy <job> <version> [args...] | rollback <job> [version] | baseline [job...]` calls its API on `:8091`. Each deploy emits `platform.deployments` and updates `platform.jobs`.
+- `make cicd-test` (`scripts/cicd-test.sh`) covers baseline, a SQL deploy from a savepoint, F1 deploy then rollback, and deploy-time args. Run it after changing cicd-sim, the catalogue or the jobs.
+- `scripts/jobs.sh` still submits jobs directly, but skips the pipeline: no deployment events, no registry. Use cicd-sim for anything a scenario or agent depends on.
+
 How the jobs are built:
 
 - The Java jobs are one jar with `--job=<name>`, fault flags (`--fault=npe-on-null-field|state-leak`) and `--on-deser-error=fail|dlq`.
@@ -38,7 +44,7 @@ Telemetry plane and Rust code (design doc §5, §10):
 - After changing a type in `platform-model`, regenerate the JSON Schemas with `UPDATE_SCHEMAS=1 cargo test -p platform-model`; a test fails while they're stale. Schema changes are breaking for ShadowTraffic's fleet configs, so update those too.
 - Ops DB schema changes are new files in `crates/platform-clients/migrations/`; never edit an applied migration.
 
-Local endpoints (all bound to 127.0.0.1): Flink UI/REST `:8081`, SQL Gateway `:8083`, Prometheus `:9090`, Kafka `:9094` (inside Compose, `kafka:9092`), Iceberg REST catalog `:8181`, RustFS S3 API `:9000` and console `:9001`, Postgres `:5432`, collector `:8090`.
+Local endpoints (all bound to 127.0.0.1): Flink UI/REST `:8081`, SQL Gateway `:8083`, Prometheus `:9090`, Kafka `:9094` (inside Compose, `kafka:9092`), Iceberg REST catalog `:8181`, RustFS S3 API `:9000` and console `:9001`, Postgres `:5432`, collector `:8090`, cicd-sim `:8091`.
 
 Cloud runtime (`scripts/aws.sh`; design doc §4.5). These create, change or delete AWS resources, so run them only when asked:
 

@@ -1,4 +1,5 @@
 //! Publishes events to the `platform.*` topics, keyed by job name.
+//! Delivery is idempotent and waits for all in-sync replicas.
 
 use std::time::Duration;
 
@@ -15,10 +16,11 @@ pub struct Publisher {
 }
 
 impl Publisher {
-    pub fn new(bootstrap_servers: &str) -> anyhow::Result<Self> {
+    /// `client_id` names the producing service in Kafka's logs and metrics.
+    pub fn new(bootstrap_servers: &str, client_id: &str) -> anyhow::Result<Self> {
         let producer = ClientConfig::new()
             .set("bootstrap.servers", bootstrap_servers)
-            .set("client.id", "collector")
+            .set("client.id", client_id)
             .set("acks", "all")
             .set("enable.idempotence", "true")
             .set("linger.ms", "20")

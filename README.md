@@ -42,7 +42,18 @@ make rust-test    # Rust unit tests and ops DB tests (needs a Rust toolchain)
 make down         # stop (keep data); `make clean` also deletes volumes
 ```
 
-To deploy a single job by hand, with or without a fault, use `scripts/jobs.sh`:
+Versioned deploys and rollbacks go through cicd-sim, the platform's deployment pipeline. The versions are listed in `jobs/versions.yaml`:
+
+```sh
+scripts/cicd.sh catalogue                           # every job's versions
+scripts/cicd.sh baseline                            # put every job on its baseline version
+scripts/cicd.sh deploy payments-enrichment 1.42.0   # the F1 bad deploy
+scripts/cicd.sh rollback payments-enrichment        # back to 1.41.0
+scripts/cicd.sh deploy trade-events-ingest 2.18.0 --on-deser-error=dlq
+make cicd-test                                      # deploys and rollbacks against real Flink
+```
+
+To submit a job by hand, outside the pipeline (no deployment events), use `scripts/jobs.sh`:
 
 ```sh
 scripts/jobs.sh submit payments-enrichment --fault=npe-on-null-field

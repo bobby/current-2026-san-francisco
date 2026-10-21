@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Submit, cancel and list the platform's Flink jobs by hand (issue #2). The
-# CI/CD simulator (#6) will take over versioned deploys.
+# Submit, cancel and list the platform's Flink jobs by hand (issue #2),
+# outside the deployment pipeline: no deployment events or registry updates.
+# Versioned deploys and rollbacks go through cicd-sim (scripts/cicd.sh).
 #
 #   scripts/jobs.sh submit <job> [job flags...]   e.g. submit payments-enrichment --fault=npe-on-null-field
 #   scripts/jobs.sh submit-all                    submit every job, healthy
