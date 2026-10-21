@@ -1,0 +1,8 @@
+# The `lake` Iceberg catalog for the cloud runtime: the AWS Glue Data Catalog
+# with tables on S3. Each Glue database has an S3 location (set by
+# infra/cloudformation/demo.yaml), so no warehouse path is needed here.
+# Credentials come from the instance role.
+type: iceberg
+catalog-impl: org.apache.iceberg.aws.glue.GlueCatalog
+io-impl: org.apache.iceberg.aws.s3.S3FileIO
+client.region: us-east-1

@@ -1,0 +1,72 @@
+# Demo platform: the cloud runtime (docs/design.md §4.5). Used on the EC2
+# instance as an override of compose.yml:
+#
+#   docker compose -f compose.yml -f compose.aws.yml up -d
+#
+# `make deploy-aws` writes the instance's .env (FLINK_IMAGE, S3_BUCKET,
+# COMPOSE_FILE) and runs this. S3 and the Glue Data Catalog replace RustFS and
+# the Iceberg REST catalog, credentials come from the instance role, and
+# memory follows the EC2 column of docs/design.md §11.
+
+x-flink-env: &flink-env
+  JOB_MANAGER_RPC_ADDRESS: jobmanager
+  AWS_REGION: ${AWS_REGION:-us-east-1}
+  FLINK_PROPERTIES: |
+    s3.path.style.access: false
+    execution.checkpointing.dir: s3://${S3_BUCKET:?}/flink/checkpoints
+    execution.checkpointing.savepoint-dir: s3://${S3_BUCKET:?}/flink/savepoints
+    jobmanager.memory.process.size: 1536m
+    taskmanager.numberOfTaskSlots: ${FLINK_TM_SLOTS:-12}
+    taskmanager.memory.process.size: ${FLINK_TM_PROCESS_SIZE:-3840m}
+
+services:
+  # Local stand-ins for S3 and Glue; not started here.
+  s3:
+    profiles: [local-storage]
+  bucket-init:
+    profiles: [local-storage]
+  iceberg-rest:
+    profiles: [local-storage]
+
+  jobmanager:
+    image: ${FLINK_IMAGE:?}
+    build: !reset null
+    volumes:
+      - ./flink/catalogs/aws:/opt/flink/catalogs:ro
+    environment: !override
+      <<: *flink-env
+      FLINK_COMPONENT: jobmanager
+    depends_on: !reset {}
+    mem_limit: 2g
+
+  taskmanager:
+    image: ${FLINK_IMAGE:?}
+    build: !reset null
+    scale: 2
+    volumes:
+      - ./flink/catalogs/aws:/opt/flink/catalogs:ro
+    environment: !override
+      <<: *flink-env
+      FLINK_COMPONENT: taskmanager
+    mem_limit: 4g
+
+  sql-gateway:
+    image: ${FLINK_IMAGE:?}
+    build: !reset null
+    volumes:
+      - ./flink/catalogs/aws:/opt/flink/catalogs:ro
+    environment: !override
+      <<: *flink-env
+      FLINK_COMPONENT: sql-gateway
+      JVM_ARGS: -Xmx384m
+
+  kafka:
+    environment:
+      KAFKA_HEAP_OPTS: -Xms1g -Xmx1g
+    mem_limit: 1536m
+
+  postgres:
+    mem_limit: 1g
+
+  prometheus:
+    mem_limit: 1g
