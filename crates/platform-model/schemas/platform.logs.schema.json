@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LogEvent",
+  "description": "`platform.logs`: structured log events from a job's JobManager and\nTaskManager logs (warnings and errors).",
+  "type": "object",
+  "properties": {
+    "component": {
+      "description": "`jobmanager`, `taskmanager` or `sql-gateway`.",
+      "type": "string"
+    },
+    "event_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "exception_class": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "exception_message": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "flink_job_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "host": {
+      "type": "string"
+    },
+    "job_name": {
+      "type": "string"
+    },
+    "level": {
+      "$ref": "#/$defs/LogLevel"
+    },
+    "logger": {
+      "type": "string"
+    },
+    "message": {
+      "type": "string"
+    },
+    "root_cause_class": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "root_cause_message": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "stack_head": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "event_id",
+    "ts",
+    "job_name",
+    "level",
+    "component",
+    "host",
+    "logger",
+    "message"
+  ],
+  "$defs": {
+    "LogLevel": {
+      "type": "string",
+      "enum": [
+        "TRACE",
+        "DEBUG",
+        "INFO",
+        "WARN",
+        "ERROR",
+        "FATAL"
+      ]
+    }
+  }
+}

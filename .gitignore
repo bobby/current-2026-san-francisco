@@ -2,3 +2,4 @@
 .DS_Store
 jobs/java/target/
 shadowtraffic/license.env
+target/

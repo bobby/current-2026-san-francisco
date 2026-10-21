@@ -30,7 +30,15 @@ How the jobs are built:
 - Every job uses the `lake` Iceberg catalog, defined per runtime in `flink/catalogs/<runtime>/lake.yaml` and loaded through Flink's file catalog store.
 - `docs/flink-metrics.md` lists the real Flink metric names and labels that the simulated fleet must match.
 
-Local endpoints (all bound to 127.0.0.1): Flink UI/REST `:8081`, SQL Gateway `:8083`, Prometheus `:9090`, Kafka `:9094` (inside Compose, `kafka:9092`), Iceberg REST catalog `:8181`, RustFS S3 API `:9000` and console `:9001`, Postgres `:5432`.
+Telemetry plane and Rust code (design doc §5, §10):
+
+- The Rust workspace (`Cargo.toml`) has the shared crates in `crates/` (`platform-model` holds the `platform.*` event types, `platform-clients` the Flink REST and ops DB clients) and the services in `services/`. Every service binary ships in one image, `platform/services`, built by `services/Dockerfile`; Compose picks the binary with `command`.
+- `make rust-test` runs the Rust tests. The ops DB tests need the local stack's Postgres, where each test gets a throwaway database. It also needs a local Rust toolchain.
+- `make telemetry-test` (`scripts/telemetry-test.sh`) checks that real job status, checkpoints, logs and alerts reach their topics and the ops DB, and that point-in-time queries work. Run it after changing the collector, Vector or the model.
+- After changing a type in `platform-model`, regenerate the JSON Schemas with `UPDATE_SCHEMAS=1 cargo test -p platform-model`; a test fails while they're stale. Schema changes are breaking for ShadowTraffic's fleet configs, so update those too.
+- Ops DB schema changes are new files in `crates/platform-clients/migrations/`; never edit an applied migration.
+
+Local endpoints (all bound to 127.0.0.1): Flink UI/REST `:8081`, SQL Gateway `:8083`, Prometheus `:9090`, Kafka `:9094` (inside Compose, `kafka:9092`), Iceberg REST catalog `:8181`, RustFS S3 API `:9000` and console `:9001`, Postgres `:5432`, collector `:8090`.
 
 Cloud runtime (`scripts/aws.sh`; design doc §4.5). These create, change or delete AWS resources, so run them only when asked:
 
@@ -45,7 +53,7 @@ Settings that differ between runtimes, such as S3 endpoint and credentials, Flin
 
 The same Docker Compose stack runs in two places. Keep both working:
 
-- **Local (development and fallback):** `compose.yml` on a MacBook Pro M3 with 18 GB. RustFS (S3-compatible) and an Iceberg REST catalog stand in for S3 and Glue. The simulated fleet is reduced and there's one TaskManager. Secrets come from a local, uncommitted `.env`.
+- **Local (development and fallback):** `compose.yml` on a MacBook Pro M3 with 18 GB. RustFS (S3-compatible) and an Iceberg REST catalog (backed by Postgres, `iceberg-rest/Dockerfile`) stand in for S3 and Glue. The simulated fleet is reduced and there's one TaskManager. Secrets come from a local, uncommitted `.env`.
 - **Cloud (live demo):** `compose.yml` + `compose.aws.yml` on one EC2 Graviton instance (`m7g.2xlarge`, 32 GB) in the `evidentsystems` AWS account (`AWS_PROFILE=evidentsystems`). It uses real S3 and the AWS Glue Data Catalog, images from ECR, and secrets from SSM Parameter Store. Access is through SSM Session Manager port forwarding only; the instance has no inbound ports.
 
 Rules for keeping them in step:

@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CheckpointEvent",
+  "description": "`platform.checkpoints`: completed and failed checkpoints and savepoints.",
+  "type": "object",
+  "properties": {
+    "checkpoint_id": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "checkpointed_size_bytes": {
+      "description": "Bytes written by this checkpoint (Flink's `checkpointed_size`).",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "duration_ms": {
+      "description": "End-to-end duration in milliseconds.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "event_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "failure_reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "flink_job_id": {
+      "type": "string"
+    },
+    "is_savepoint": {
+      "type": "boolean"
+    },
+    "job_name": {
+      "type": "string"
+    },
+    "state_size_bytes": {
+      "description": "Full state size in bytes (Flink's `state_size`).",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "status": {
+      "$ref": "#/$defs/CheckpointStatus"
+    },
+    "trigger_ts": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "ts": {
+      "description": "When the checkpoint completed or failed.",
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "event_id",
+    "ts",
+    "job_name",
+    "flink_job_id",
+    "checkpoint_id",
+    "status",
+    "is_savepoint",
+    "trigger_ts",
+    "duration_ms",
+    "checkpointed_size_bytes",
+    "state_size_bytes"
+  ],
+  "$defs": {
+    "CheckpointStatus": {
+      "type": "string",
+      "enum": [
+        "completed",
+        "failed"
+      ]
+    }
+  }
+}

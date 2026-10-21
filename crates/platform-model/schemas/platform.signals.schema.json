@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Signal",
+  "description": "`platform.signals`: the triage agent's verdict on an alert or a group of\nalerts (Scenario 1, docs/design.md §8.1).",
+  "type": "object",
+  "properties": {
+    "actionable": {
+      "description": "Jev's probability that the problem is genuine and needs action.",
+      "type": [
+        "number",
+        "null"
+      ],
+      "format": "double"
+    },
+    "alert_event_ids": {
+      "description": "The alerts this verdict covers.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "format": "uuid"
+      }
+    },
+    "deploy_related": {
+      "description": "Jev's probability that the latest deployment caused this.",
+      "type": [
+        "number",
+        "null"
+      ],
+      "format": "double"
+    },
+    "deployment_event_id": {
+      "description": "The deployment considered, if one was in the window.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
+    "disposition": {
+      "$ref": "#/$defs/Disposition"
+    },
+    "failure_class": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FailureClass"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "incident_id": {
+      "description": "The incident this signal raised or was attached to.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
+    "job_name": {
+      "type": "string"
+    },
+    "judgment": {
+      "description": "The state, questions and answers sent to and from Jev, for audit."
+    },
+    "signal_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "tenant": {
+      "type": "string"
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "user_impact": {
+      "description": "Jev's user-impact score, from 0 (none) to 1 (stopped / data at risk).",
+      "type": [
+        "number",
+        "null"
+      ],
+      "format": "double"
+    }
+  },
+  "required": [
+    "signal_id",
+    "ts",
+    "job_name",
+    "tenant",
+    "alert_event_ids",
+    "disposition",
+    "judgment"
+  ],
+  "$defs": {
+    "Disposition": {
+      "type": "string",
+      "enum": [
+        "suppress",
+        "attach",
+        "raise"
+      ]
+    },
+    "FailureClass": {
+      "type": "string",
+      "enum": [
+        "code_regression",
+        "bad_input_data",
+        "resource_saturation",
+        "state_growth",
+        "schema_mismatch",
+        "platform_infrastructure",
+        "transient_or_expected",
+        "unknown"
+      ]
+    }
+  }
+}

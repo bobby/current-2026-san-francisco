@@ -171,6 +171,13 @@ Resources:
       RepositoryName: !Sub "${AWS::StackName}/flink"
       EmptyOnDelete: true
 
+  # The Rust services (one image; the command picks the binary).
+  ServicesRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "${AWS::StackName}/services"
+      EmptyOnDelete: true
+
   InstanceRole:
     Type: AWS::IAM::Role
     Properties:
@@ -288,6 +295,8 @@ Outputs:
     Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com"
   FlinkRepositoryUri:
     Value: !GetAtt FlinkRepository.RepositoryUri
+  ServicesRepositoryUri:
+    Value: !GetAtt ServicesRepository.RepositoryUri
   ParameterPrefix:
     Description: SSM Parameter Store prefix for the demo's secrets.
     Value: !Sub "/${AWS::StackName}/"

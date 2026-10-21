@@ -43,7 +43,7 @@ The business logic of the Flink jobs doesn't matter. The talk is about operating
 | D8 | **Swappable Jev endpoint** (Jev or OpenJev/SemIf via `base_url`) | Not tied to one provider. Both share the `/v1/systemone` API |
 | D9 | **Mattermost in Compose** for ChatOps; **ServiceNow-shaped mock** for ticketing | Good visuals with nothing to procure; tickets appear as rich cards in chat |
 | D10 | **Demo runs on one EC2 instance** (Graviton) using the same Compose stack. The laptop is for development and is the fallback | Relieves the 18 GB laptop limit, and the arm64 images are shared with the M3 |
-| D11 | **Real S3 + AWS Glue Data Catalog** for Iceberg, checkpoints and savepoints on AWS. RustFS (S3-compatible) + Iceberg REST catalog locally | Believability; Glue is the simplest catalog. MinIO no longer publishes container images, so the local store is RustFS |
+| D11 | **Real S3 + AWS Glue Data Catalog** for Iceberg, checkpoints and savepoints on AWS. RustFS (S3-compatible) + Iceberg REST catalog locally, with the catalog's tables in Postgres | Believability; Glue is the simplest catalog. MinIO no longer publishes container images, so the local store is RustFS. The REST fixture's default SQLite backend failed concurrent commits with `SQLITE_BUSY` |
 | D12 | **SSM Session Manager port forwarding** for access | No inbound ports, and only the AWS CLI is needed |
 | D13 | **CloudFormation (plain YAML)** for infrastructure | See §10.1 |
 | D15 | **Anthropic API** for Claude Code and **hosted Jev API**, with keys in SSM Parameter Store | Both keys are already available |
@@ -95,7 +95,7 @@ flowchart LR
   CICD -->|REST deploy| F
   CICD --> K
   F -->|/metrics| P
-  F -->|logs| V --> K
+  F -->|logs| V --> COL
   COL -->|poll REST| F
   COL --> K
   STfleet --> K
@@ -219,13 +219,30 @@ ShadowTraffic can also write Iceberg directly to Glue. We may use that to fill f
 | `platform.deployments` | cicd-sim, st-fleet | Deployment events (§4.3) |
 | `platform.job-status` | collector, st-fleet | Status transitions, restarts, failure causes |
 | `platform.checkpoints` | collector, st-fleet | Completed and failed checkpoints: duration, size, failure reason |
-| `platform.logs` | Vector, st-fleet | Structured log events: job, level, logger, message, exception class, stack-trace head |
+| `platform.logs` | collector (from Vector), st-fleet | Structured log events: job, level, logger, message, exception class, root cause, stack-trace head |
 | `platform.metrics` | st-fleet | Simulated metric samples. Real metrics are scraped directly by Prometheus |
 | `platform.alerts` | collector (from Alertmanager) | Fired and resolved alerts |
 | `platform.signals` | triage | Scenario 1 output: alerts with Jev judgments and a disposition |
 | `platform.actions` | operator, chatops-bot, cicd-sim | Audit log of every remediation proposed, approved or executed |
 
-The schemas live in a shared Rust crate (`platform-model`), with matching JSON Schema files that the ShadowTraffic configs target.
+The schemas live in a shared Rust crate (`crates/platform-model`), with matching JSON Schema files generated from it in `crates/platform-model/schemas/<topic>.schema.json`, which the ShadowTraffic configs target. Conventions:
+
+- Every event is keyed in Kafka by `job_name`, the platform's stable job name. `flink_job_id` identifies one Flink run and changes on every deploy.
+- Timestamps are RFC 3339 strings in UTC.
+- `event_id` is a UUID. The collector derives it from Flink's own identifiers (job ID plus checkpoint ID, failure timestamp and so on), so history it re-reads after a restart is stored once.
+
+`kafka-init` creates the topics at start-up. `platform.jobs` is compacted, `platform.metrics` keeps an hour and `platform.logs` a day.
+
+### 5.1.1 Collector
+
+The collector (`services/collector`) is one Rust service with four parts:
+
+- **Flink poller.** Every 2 s it reads `/jobs/overview`, each job's exception history, `numRestarts` and checkpoint history.
+  - It publishes state transitions and failures to `platform.job-status`. A restart loop can fail and recover between two polls, so each failure comes from the exception history as its own event, with the root cause (the innermost `Caused by:`) and the stack-trace head.
+  - It publishes each finished checkpoint, completed or failed, to `platform.checkpoints`.
+- **Alertmanager webhook** (`POST /alertmanager`). Each firing or resolved alert becomes one `platform.alerts` event, however often Alertmanager repeats it. Flink's reporter rewrites `job_name` labels (`payments_enrichment`), so the collector maps them back to the platform name from the Flink job ID or the job registry, and adds the tenant from the registry.
+- **Log intake** (`POST /logs`). Vector tails the Flink containers' JSON logs and forwards job-scoped warnings and errors. Flink's log lines carry only the job ID, so the collector adds the job name and publishes `platform.logs`.
+- **Ops DB sink.** It consumes every `platform.*` topic except metrics into Postgres, storing a consumer offset only after the write succeeds.
 
 ### 5.2 Metrics
 
@@ -243,9 +260,15 @@ The rules are **deliberately naive**, the kind of static thresholds every platfo
 
 ### 5.4 Ops DB
 
-A Postgres database (`ops`) is filled from Kafka by the collector. It holds jobs, deployments, job status, checkpoints, recent logs (a retention window per job), alerts, signals and actions. Agents and the MCP server query it for point-in-time context ("what was deployed, and what did checkpoints look like, before the first alert?").
+A Postgres database (`ops`) is filled from Kafka by the collector. Its schema is in `crates/platform-clients/migrations/`, and the collector applies it at start-up. It has one table per topic:
 
-The same Postgres instance hosts the `mattermost` and `tickets` databases, to save memory.
+- `jobs` is the current registry;
+- `deployments`, `job_status`, `checkpoints`, `alerts`, `signals` and `actions` are append-only and keyed by event ID;
+- `logs` keeps a retention window (`LOG_RETENTION`, 24 h by default).
+
+Agents and the MCP server query it for point-in-time context ("what was deployed, and what did checkpoints look like, before the first alert?") through `platform_clients::ops_db`. That module has `checkpoints_before`, `deployments_before`, `status_between`, `logs_between`, `alerts_between` and `job_at`; `job_at` is a job's latest status, deployment and completed checkpoint as of a time. The reads return the same types as the topics.
+
+The same Postgres instance hosts the `mattermost`, `tickets` and (locally) `iceberg` catalog databases, to save memory. `postgres-init` creates each database and role on every `up` (`postgres/databases.sh`, idempotent), so a database added later also reaches an existing volume.
 
 ## 6. Models
 
@@ -377,10 +400,11 @@ compose.yml                 # base (laptop: RustFS + Iceberg REST catalog)
 compose.aws.yml             # override (S3 + Glue, bigger heaps)
 Cargo.toml                  # Rust workspace
 crates/
-  platform-model/           # shared event types and schemas
-  platform-clients/         # Flink REST, Prometheus, ops DB, tickets, chatops clients
+  platform-model/           # shared event types; schemas/ holds the generated JSON Schemas
+  platform-clients/         # Flink REST, Prometheus, ops DB (+ migrations), tickets, chatops clients
 services/
-  collector/                # Flink REST poller, Alertmanager webhook, Kafka→Postgres
+  Dockerfile                # one image for every service; the command picks the binary
+  collector/                # Flink REST poller, Alertmanager webhook, log intake, Kafka→Postgres
   fleet-exporter/
   cicd-sim/
   tickets/
@@ -401,7 +425,7 @@ infra/cloudformation/demo.yaml
 docs/
 ```
 
-To save memory, the small Rust services may ship as one image whose binary takes a subcommand per service.
+To save memory and build time, the Rust services ship as one image (`platform/services`) that contains every binary. Each Compose service picks its binary with `command`.
 
 ### 10.1 CloudFormation vs. CDK
 

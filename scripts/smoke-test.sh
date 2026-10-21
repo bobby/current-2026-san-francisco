@@ -139,7 +139,7 @@ kafka kafka-topics.sh --bootstrap-server localhost:9092 --delete --topic smoke-t
 pass "produce/consume round trip"
 
 step "Postgres"
-for db in ops tickets mattermost; do
+for db in ops tickets mattermost iceberg; do
   var="$(tr '[:lower:]' '[:upper:]' <<<"$db")_DB_PASSWORD"
   docker compose exec -T -e PGPASSWORD="${!var:-$db}" postgres \
     psql -h localhost -U "$db" -d "$db" -tAc 'select 1' >/dev/null || fail "cannot connect to $db as $db"

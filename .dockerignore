@@ -1,0 +1,7 @@
+# Only the Rust workspace goes into the services image's build context.
+*
+!Cargo.toml
+!Cargo.lock
+!crates
+!services
+**/target

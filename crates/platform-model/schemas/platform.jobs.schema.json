@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "JobRecord",
+  "description": "`platform.jobs`: the job registry, compacted on `job_name`. Written by\ncicd-sim on every deploy, and by `st-fleet` for the simulated fleet.",
+  "type": "object",
+  "properties": {
+    "current_version": {
+      "type": "string"
+    },
+    "deployed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "first_deployed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "flink_job_id": {
+      "description": "Flink job ID of the current run, if it is running.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "job_name": {
+      "type": "string"
+    },
+    "kind": {
+      "$ref": "#/$defs/JobKind"
+    },
+    "max_parallelism": {
+      "description": "Maximum parallelism the tenant's policy allows (rescale guardrail).",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "owner": {
+      "description": "Owning team's contact, e.g. a Mattermost handle or group.",
+      "type": "string"
+    },
+    "tenant": {
+      "description": "Owning tenant, e.g. `payments-eng`.",
+      "type": "string"
+    },
+    "tier": {
+      "$ref": "#/$defs/Tier"
+    }
+  },
+  "required": [
+    "job_name",
+    "tenant",
+    "owner",
+    "tier",
+    "kind",
+    "current_version",
+    "max_parallelism",
+    "deployed_at",
+    "first_deployed_at"
+  ],
+  "$defs": {
+    "JobKind": {
+      "type": "string",
+      "enum": [
+        "java",
+        "sql"
+      ]
+    },
+    "Tier": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "tier2"
+          ]
+        },
+        {
+          "description": "Business-critical: pages someone.",
+          "type": "string",
+          "const": "tier1"
+        },
+        {
+          "description": "Best effort.",
+          "type": "string",
+          "const": "tier3"
+        }
+      ]
+    }
+  }
+}

@@ -12,6 +12,9 @@ name: platform
 x-flink: &flink
   build: ./flink
   image: platform/flink:2.1.2
+  # Vector ships logs from containers with this label.
+  labels:
+    platform.logs: flink
   volumes:
     - ./flink/catalogs/local:/opt/flink/catalogs:ro
   environment: &flink-env
@@ -64,6 +67,32 @@ services:
       retries: 10
       start_period: 20s
 
+  # Creates the telemetry topics (docs/design.md §5.1) before anything
+  # produces to them, so the job registry is compacted.
+  kafka-init:
+    image: apache/kafka:4.2.2
+    environment:
+      KAFKA_HEAP_OPTS: -Xmx64m
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -euo pipefail
+        create() {
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists \
+            --partitions 3 --topic "$$@" >/dev/null
+          echo "topic $$1 ready"
+        }
+        create platform.jobs --config cleanup.policy=compact &
+        create platform.metrics --config retention.ms=3600000 &
+        create platform.logs --config retention.ms=86400000 &
+        for topic in deployments job-status checkpoints alerts signals actions; do
+          create "platform.$$topic" &
+        done
+        for job in $$(jobs -p); do wait "$$job"; done
+    depends_on:
+      kafka:
+        condition: service_healthy
+
   # S3-compatible object store standing in for S3 locally (RustFS; MinIO no
   # longer publishes container images).
   s3:
@@ -109,10 +138,16 @@ services:
       s3:
         condition: service_healthy
 
+  # Iceberg REST catalog, with its catalog tables in Postgres
+  # (iceberg-rest/Dockerfile).
   iceberg-rest:
-    image: apache/iceberg-rest-fixture:1.10.1
+    build: ./iceberg-rest
+    image: platform/iceberg-rest:1.10.1
     environment:
       CATALOG_WAREHOUSE: s3://warehouse/
+      CATALOG_URI: jdbc:postgresql://postgres:5432/iceberg
+      CATALOG_JDBC_USER: iceberg
+      CATALOG_JDBC_PASSWORD: ${ICEBERG_DB_PASSWORD:-iceberg}
       CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
       CATALOG_S3_ENDPOINT: ${S3_ENDPOINT:-http://s3:9000}
       CATALOG_S3_PATH__STYLE__ACCESS: "true"
@@ -122,9 +157,6 @@ services:
       JAVA_TOOL_OPTIONS: -Xmx256m
     ports:
       - 127.0.0.1:8181:8181
-    volumes:
-      # The fixture keeps its catalog in SQLite under /tmp.
-      - iceberg-catalog:/tmp
     mem_limit: 512m
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8181/v1/config"]
@@ -134,6 +166,9 @@ services:
     depends_on:
       bucket-init:
         condition: service_completed_successfully
+      postgres-init:
+        condition: service_completed_successfully
+
 
   jobmanager:
     <<: *flink
@@ -209,20 +244,34 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-      OPS_DB_PASSWORD: ${OPS_DB_PASSWORD:-ops}
-      TICKETS_DB_PASSWORD: ${TICKETS_DB_PASSWORD:-tickets}
-      MATTERMOST_DB_PASSWORD: ${MATTERMOST_DB_PASSWORD:-mattermost}
     ports:
       - 127.0.0.1:5432:5432
     volumes:
       - postgres-data:/var/lib/postgresql
-      - ./postgres/init:/docker-entrypoint-initdb.d:ro
     mem_limit: 512m
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
       interval: 5s
       timeout: 5s
       retries: 20
+
+  # Creates each service's database and role, on every `up` (idempotent).
+  postgres-init:
+    image: postgres:18.6
+    command: ["/databases.sh"]
+    environment:
+      PGHOST: postgres
+      PGUSER: postgres
+      PGPASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      OPS_DB_PASSWORD: ${OPS_DB_PASSWORD:-ops}
+      TICKETS_DB_PASSWORD: ${TICKETS_DB_PASSWORD:-tickets}
+      MATTERMOST_DB_PASSWORD: ${MATTERMOST_DB_PASSWORD:-mattermost}
+      ICEBERG_DB_PASSWORD: ${ICEBERG_DB_PASSWORD:-iceberg}
+    volumes:
+      - ./postgres/databases.sh:/databases.sh:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   prometheus:
     image: prom/prometheus:v3.13.4
@@ -243,9 +292,48 @@ services:
       timeout: 5s
       retries: 20
 
+  # Flink REST → platform.job-status and platform.checkpoints; Alertmanager
+  # webhook → platform.alerts; Vector → platform.logs; platform.* → ops DB
+  # (docs/design.md §5).
+  collector:
+    build:
+      context: .
+      dockerfile: services/Dockerfile
+    image: platform/services:latest
+    command: [collector]
+    environment:
+      OPS_DATABASE_URL: postgres://ops:${OPS_DB_PASSWORD:-ops}@postgres:5432/ops
+      LOG_RETENTION: ${LOG_RETENTION:-24h}
+    ports:
+      - 127.0.0.1:8090:8090
+    mem_limit: 128m
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8090/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      postgres-init:
+        condition: service_completed_successfully
+      jobmanager:
+        condition: service_healthy
+
+  # Ships the Flink containers' logs to the collector.
+  vector:
+    image: timberio/vector:0.59.0-debian
+    command: ["--config", "/etc/vector/vector.yaml"]
+    volumes:
+      - ./observability/vector:/etc/vector:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    mem_limit: 256m
+    depends_on:
+      collector:
+        condition: service_healthy
+
 volumes:
   kafka-data:
   s3-data:
-  iceberg-catalog:
   postgres-data:
   prometheus-data:

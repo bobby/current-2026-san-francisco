@@ -3,8 +3,8 @@
 #
 #   docker compose -f compose.yml -f compose.aws.yml up -d
 #
-# `make deploy-aws` writes the instance's .env (FLINK_IMAGE, S3_BUCKET,
-# COMPOSE_FILE) and runs this. S3 and the Glue Data Catalog replace RustFS and
+# `make deploy-aws` writes the instance's .env (FLINK_IMAGE, SERVICES_IMAGE,
+# S3_BUCKET, COMPOSE_FILE) and runs this. S3 and the Glue Data Catalog replace RustFS and
 # the Iceberg REST catalog, credentials come from the instance role, and
 # memory follows the EC2 column of docs/design.md §11.
 
@@ -27,6 +27,7 @@ services:
     profiles: [local-storage]
   iceberg-rest:
     profiles: [local-storage]
+    depends_on: !reset {}
 
   jobmanager:
     image: ${FLINK_IMAGE:?}
@@ -59,6 +60,10 @@ services:
       <<: *flink-env
       FLINK_COMPONENT: sql-gateway
       JVM_ARGS: -Xmx384m
+
+  collector:
+    image: ${SERVICES_IMAGE:?}
+    build: !reset null
 
   kafka:
     environment:
