@@ -1,6 +1,6 @@
 [package]
 name = "platform-clients"
-description = "Clients for the platform's services: the Flink REST API and the ops DB."
+description = "Clients for the platform's services: the Flink REST API and SQL Gateway, Kafka and the ops DB."
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
@@ -9,12 +9,15 @@ publish.workspace = true
 
 [dependencies]
 platform-model.workspace = true
+anyhow.workspace = true
 chrono.workspace = true
+rdkafka.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]

@@ -1,0 +1,117 @@
+# The version catalogue cicd-sim deploys from (docs/design.md §4.3). Each
+# version is what a real pipeline would have built from one commit. A "buggy
+# version" is just one whose args set a fault flag (docs/design.md §7.1).
+#
+# - Java jobs run jobs/java/target/platform-jobs.jar with --job=<name> plus
+#   the version's args. A deploy request can add args (e.g. the F2 fix,
+#   --on-deser-error=dlq) without a new version.
+# - SQL jobs run jobs/sql/<name>.sql.
+# - `baseline` is the version each job runs before any scenario starts.
+#
+# Names, teams and people are fictional.
+
+jobs:
+  payments-enrichment:
+    tenant: payments-eng
+    owner: "@payments-eng"
+    tier: tier1
+    kind: java
+    max_parallelism: 4
+    baseline: 1.41.0
+    versions:
+      - version: 1.40.2
+        commit_sha: 3e9b1c7
+        author: priya.natarajan
+        summary: Retry merchant lookups on transient errors
+      - version: 1.41.0
+        commit_sha: a71f04d
+        author: priya.natarajan
+        summary: Add risk band for card-not-present payments
+      # F1: a regression that dereferences a sometimes-null merchant category.
+      - version: 1.42.0
+        commit_sha: c4d2e98
+        author: marco.diaz
+        summary: Normalise merchant category casing before risk lookup
+        args: ["--fault=npe-on-null-field"]
+
+  trade-events-ingest:
+    tenant: trading-data
+    owner: "@trading-data"
+    tier: tier1
+    kind: java
+    max_parallelism: 4
+    baseline: 2.17.1
+    versions:
+      - version: 2.17.1
+        commit_sha: 9b0e2a4
+        author: lena.kowalski
+        summary: Tag trades with the ingest host for tracing
+      # F2's red herring: deployed shortly before the poison records arrive,
+      # but it doesn't touch parsing.
+      - version: 2.18.0
+        commit_sha: 5f61c3b
+        author: sam.okafor
+        summary: Add venue to ingest throughput metrics
+
+  positions-aggregator:
+    tenant: risk-platform
+    owner: "@risk-platform"
+    tier: tier2
+    kind: java
+    max_parallelism: 4
+    baseline: 0.8.3
+    versions:
+      - version: 0.8.3
+        commit_sha: e02a7f1
+        author: dana.whitfield
+        summary: Expire recent fills after 15 minutes
+      # F4: keeps every fill forever (no state TTL).
+      - version: 0.9.0
+        commit_sha: 7acb5d0
+        author: dana.whitfield
+        summary: Keep full fill history for intraday position audit
+        args: ["--fault=state-leak"]
+
+  market-data-to-iceberg:
+    tenant: market-data
+    owner: "@market-data"
+    tier: tier2
+    kind: sql
+    max_parallelism: 6
+    baseline: 12.0.0
+    versions:
+      - version: 12.0.0
+        commit_sha: 1d4c8e2
+        author: wei.chen
+        summary: Compute spread in basis points
+
+  customer-events-to-iceberg:
+    tenant: customer-360
+    owner: "@customer-360"
+    tier: tier3
+    kind: sql
+    max_parallelism: 2
+    baseline: 5.2.0
+    versions:
+      - version: 5.2.0
+        commit_sha: 8f3a6b9
+        author: ines.moreau
+        summary: Keep session id for funnel analysis
+
+  audit-log-archiver:
+    tenant: compliance-eng
+    owner: "@compliance-eng"
+    tier: tier1
+    kind: sql
+    max_parallelism: 2
+    baseline: 3.30.0
+    versions:
+      - version: 3.30.0
+        commit_sha: 0c7d9e3
+        author: ravi.menon
+        summary: Archive source IP with each audit entry
+      # A healthy control job that deploys often.
+      - version: 3.31.0
+        commit_sha: b25e4f8
+        author: ravi.menon
+        summary: Bump retention tag for the 2027 policy

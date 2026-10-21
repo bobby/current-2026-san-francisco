@@ -49,6 +49,13 @@ pub struct JobSnapshot {
     pub failed_checkpoints_since: i64,
 }
 
+/// Where a new run of a job can restore its state from.
+#[derive(Debug, Clone, PartialEq, FromRow)]
+pub struct RestorePoint {
+    pub path: String,
+    pub ts: Timestamp,
+}
+
 /// Stores an enum as the string serde gives it, e.g. `RESTARTING`.
 fn enum_str<T: Serialize>(value: &T) -> String {
     match serde_json::to_value(value) {
@@ -116,8 +123,9 @@ impl OpsDb {
     pub async fn insert_deployment(&self, d: &Deployment) -> Result<()> {
         sqlx::query(
             "INSERT INTO deployments (event_id, ts, job_name, tenant, kind, from_version, to_version,
-                                      commit_sha, author, summary, outcome, flink_job_id, restored_from)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                                      commit_sha, author, summary, outcome, flink_job_id, restored_from,
+                                      args, triggered_by, failure_reason)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
              ON CONFLICT DO NOTHING",
         )
         .bind(d.event_id)
@@ -133,6 +141,9 @@ impl OpsDb {
         .bind(enum_str(&d.outcome))
         .bind(&d.flink_job_id)
         .bind(&d.restored_from)
+        .bind(&d.args)
+        .bind(&d.triggered_by)
+        .bind(&d.failure_reason)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -169,8 +180,8 @@ impl OpsDb {
         sqlx::query(
             "INSERT INTO checkpoints (event_id, ts, job_name, flink_job_id, checkpoint_id, status, is_savepoint,
                                       trigger_ts, duration_ms, checkpointed_size_bytes, state_size_bytes,
-                                      failure_reason)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                                      failure_reason, external_path)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
              ON CONFLICT DO NOTHING",
         )
         .bind(c.event_id)
@@ -185,6 +196,7 @@ impl OpsDb {
         .bind(c.checkpointed_size_bytes as i64)
         .bind(c.state_size_bytes as i64)
         .bind(&c.failure_reason)
+        .bind(&c.external_path)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -318,6 +330,28 @@ impl OpsDb {
         .fetch_all(&self.pool)
         .await?;
         rows.into_iter().map(TryInto::try_into).collect()
+    }
+
+    /// The newest savepoint or retained checkpoint of the job that a new run
+    /// can restore from, e.g. to roll back a run that can't take a savepoint
+    /// because it is restart-looping. Candidates are completed savepoints,
+    /// the completed checkpoints of runs that didn't finish (Flink deletes a
+    /// run's checkpoints when it finishes, e.g. after stop-with-savepoint),
+    /// and the restore points deployments started from.
+    pub async fn latest_restore_point(&self, job_name: &str) -> Result<Option<RestorePoint>> {
+        Ok(sqlx::query_as(
+            "SELECT external_path AS path, ts FROM checkpoints
+              WHERE job_name = $1 AND status = 'completed' AND external_path IS NOT NULL
+                AND (is_savepoint OR flink_job_id NOT IN
+                      (SELECT flink_job_id FROM job_status WHERE job_name = $1 AND status = 'FINISHED'))
+             UNION ALL
+             SELECT restored_from, ts FROM deployments
+              WHERE job_name = $1 AND outcome = 'succeeded' AND restored_from IS NOT NULL
+             ORDER BY ts DESC LIMIT 1",
+        )
+        .bind(job_name)
+        .fetch_optional(&self.pool)
+        .await?)
     }
 
     /// The job's deployments before `before`, newest first.
@@ -483,6 +517,9 @@ struct DeploymentRow {
     outcome: String,
     flink_job_id: Option<String>,
     restored_from: Option<String>,
+    args: Vec<String>,
+    triggered_by: String,
+    failure_reason: Option<String>,
 }
 
 impl TryFrom<DeploymentRow> for Deployment {
@@ -502,6 +539,9 @@ impl TryFrom<DeploymentRow> for Deployment {
             outcome: parse_enum(&r.outcome)?,
             flink_job_id: r.flink_job_id,
             restored_from: r.restored_from,
+            args: r.args,
+            triggered_by: r.triggered_by,
+            failure_reason: r.failure_reason,
         })
     }
 }
@@ -561,6 +601,7 @@ struct CheckpointRow {
     checkpointed_size_bytes: i64,
     state_size_bytes: i64,
     failure_reason: Option<String>,
+    external_path: Option<String>,
 }
 
 impl TryFrom<CheckpointRow> for CheckpointEvent {
@@ -579,6 +620,7 @@ impl TryFrom<CheckpointRow> for CheckpointEvent {
             checkpointed_size_bytes: r.checkpointed_size_bytes as u64,
             state_size_bytes: r.state_size_bytes as u64,
             failure_reason: r.failure_reason,
+            external_path: r.external_path,
         })
     }
 }

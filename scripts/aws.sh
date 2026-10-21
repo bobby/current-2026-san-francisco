@@ -37,7 +37,7 @@ TUNNEL_PORTS=(8081 8083 9090)
 BUNDLE=(
   compose.yml compose.aws.yml
   flink/catalogs/aws
-  jobs/sql jobs/java/target/platform-jobs.jar
+  jobs/sql jobs/java/target/platform-jobs.jar jobs/versions.yaml
   observability postgres
   shadowtraffic/inputs.json
   scripts

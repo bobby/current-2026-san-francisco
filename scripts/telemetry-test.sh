@@ -36,13 +36,12 @@ retry() {
 sql() { docker compose exec -T postgres psql -U ops -d ops -Atc "$1"; }
 
 # topic_has <topic> <pattern>: some record on the topic matches the pattern.
-# (The consumer's output is read in full first: with pipefail, `grep -q`
-# exiting early would fail the pipeline.)
 topic_has() {
-  local records
-  records=$(docker compose exec -T kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 \
-    --topic "$1" --from-beginning --timeout-ms 5000 2>/dev/null || true)
-  grep -q -- "$2" <<<"$records"
+  # Busy topics never go idle long enough for --timeout-ms, so bound the read
+  # with `timeout` and stop at the first match. (Process substitution keeps
+  # the consumer's SIGPIPE from failing the test under pipefail.)
+  grep -q -m1 -- "$2" < <(docker compose exec -T kafka timeout 30 /opt/kafka/bin/kafka-console-consumer.sh \
+    --bootstrap-server localhost:9092 --topic "$1" --from-beginning 2>/dev/null)
 }
 
 produce() {
@@ -131,7 +130,8 @@ deployment_id=$(uuidgen | tr 'A-Z' 'a-z')
   printf 'payments-enrichment\t%s\n' "$(jq -nc --arg now "$now" --arg id "$deployment_id" --arg jid "$payments" '{
     event_id: $id, ts: $now, job_name: "payments-enrichment", tenant: "payments-eng", kind: "deploy",
     from_version: "v7", to_version: "v8", commit_sha: "9f2c1ab", author: "dana", summary: "Normalise merchant categories",
-    outcome: "succeeded", flink_job_id: $jid, restored_from: null}')"
+    args: ["--job=payments-enrichment"], triggered_by: "telemetry-test", outcome: "succeeded", failure_reason: null,
+    flink_job_id: $jid, restored_from: null}')"
 } | produce platform.deployments
 registered() { [[ "$(sql "select tenant || ' ' || current_version from jobs where job_name = 'payments-enrichment'")" == "payments-eng v8" ]]; }
 retry 30 registered || fail "job registry not in the ops DB"

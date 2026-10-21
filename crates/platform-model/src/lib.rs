@@ -101,7 +101,15 @@ pub struct Deployment {
     pub author: String,
     /// The change summary from the version catalogue.
     pub summary: String,
+    /// Job arguments the version ran with (Java jobs), including any the
+    /// request added, e.g. `--on-deser-error=dlq`.
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Who asked for it: `director`, `operator`, `chatops-bot`, `user:<name>`.
+    pub triggered_by: String,
     pub outcome: DeploymentOutcome,
+    /// Why the deploy failed, if it did.
+    pub failure_reason: Option<String>,
     /// Flink job ID of the new run, once submitted.
     pub flink_job_id: Option<String>,
     /// Savepoint or retained checkpoint the new run started from.
@@ -214,6 +222,9 @@ pub struct CheckpointEvent {
     /// Full state size in bytes (Flink's `state_size`).
     pub state_size_bytes: u64,
     pub failure_reason: Option<String>,
+    /// Where a completed checkpoint or savepoint is stored, for restoring
+    /// from it (rollbacks).
+    pub external_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

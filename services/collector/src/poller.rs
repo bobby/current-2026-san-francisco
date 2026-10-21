@@ -21,12 +21,18 @@ use platform_model::{
 };
 use tracing::{debug, warn};
 
-use crate::{jobs::JobNames, publisher::Publisher};
+use platform_clients::kafka::Publisher;
+
+use crate::jobs::JobNames;
 
 /// Exception history entries read per poll.
 const MAX_EXCEPTIONS: usize = 20;
 /// Checkpoint IDs remembered per run, to publish each checkpoint once.
 const SEEN_CHECKPOINTS: usize = 200;
+/// How long a terminated run is still polled. Flink's REST API caches
+/// checkpoint statistics for a few seconds, so the poll that first sees a run
+/// end can miss its final checkpoint or savepoint (e.g. stop-with-savepoint).
+const TERMINAL_GRACE_MS: i64 = 15_000;
 
 pub async fn run(flink: FlinkClient, publisher: Publisher, names: JobNames, interval: Duration) -> anyhow::Result<()> {
     let mut tracker = Tracker::default();
@@ -56,7 +62,7 @@ async fn poll(
         let exceptions = flink.exceptions(&job.jid, MAX_EXCEPTIONS).await?;
         let restarts = flink.job_metrics(&job.jid, &["numRestarts"]).await?.get("numRestarts").map(|r| *r as u64);
         let checkpoints = flink.checkpoints(&job.jid).await?;
-        let events = tracker.observe(job, &exceptions, restarts, &checkpoints);
+        let events = tracker.observe(job, &exceptions, restarts, &checkpoints, Utc::now().timestamp_millis());
         for event in events {
             debug!(?event, "publishing");
             match &event {
@@ -113,6 +119,7 @@ impl Tracker {
         exceptions: &[ExceptionEntry],
         restarts: Option<u64>,
         checkpoints: &[CheckpointEntry],
+        now_ms: i64,
     ) -> Vec<Event> {
         let run = self.runs.entry(job.jid.clone()).or_default();
         let mut events = Vec::new();
@@ -195,6 +202,7 @@ impl Tracker {
                 checkpointed_size_bytes: c.checkpointed_size,
                 state_size_bytes: c.state_size,
                 failure_reason: c.failure_message.clone(),
+                external_path: c.external_path.clone(),
             }));
             run.checkpoints.insert(c.id);
         }
@@ -202,7 +210,7 @@ impl Tracker {
             run.checkpoints.pop_first();
         }
 
-        run.done = job.state.is_terminal();
+        run.done = job.state.is_terminal() && now_ms - job.last_modification >= TERMINAL_GRACE_MS;
         events
     }
 }
@@ -254,18 +262,18 @@ mod tests {
     #[test]
     fn first_sight_of_a_running_job() {
         let mut tracker = Tracker::default();
-        let events = tracker.observe(&job(JobState::Running, 5000), &[], Some(0), &[]);
+        let events = tracker.observe(&job(JobState::Running, 5000), &[], Some(0), &[], 6000);
         assert_eq!(statuses(&events), [(JobState::Running, None, 0, false)]);
         // Nothing new on the next poll.
-        assert!(tracker.observe(&job(JobState::Running, 5000), &[], Some(0), &[]).is_empty());
+        assert!(tracker.observe(&job(JobState::Running, 5000), &[], Some(0), &[], 6000).is_empty());
     }
 
     #[test]
     fn restart_loop_between_polls() {
         let mut tracker = Tracker::default();
-        tracker.observe(&job(JobState::Running, 5000), &[], Some(0), &[]);
+        tracker.observe(&job(JobState::Running, 5000), &[], Some(0), &[], 6000);
         // Two failures and a recovery happened between polls.
-        let events = tracker.observe(&job(JobState::Running, 9000), &[npe(8000), npe(6000)], Some(2), &[]);
+        let events = tracker.observe(&job(JobState::Running, 9000), &[npe(8000), npe(6000)], Some(2), &[], 10000);
         assert_eq!(
             statuses(&events),
             [
@@ -280,14 +288,16 @@ mod tests {
         assert_eq!(failure.message.as_deref(), Some("Failed to deserialize consumer record due to"));
         assert_eq!(failure.root_cause_class.as_deref(), Some("java.lang.NullPointerException"));
         // The same history isn't published twice.
-        assert!(tracker.observe(&job(JobState::Running, 9000), &[npe(8000), npe(6000)], Some(2), &[]).is_empty());
+        assert!(
+            tracker.observe(&job(JobState::Running, 9000), &[npe(8000), npe(6000)], Some(2), &[], 10000).is_empty()
+        );
     }
 
     #[test]
     fn checkpoints_are_published_once_when_finished() {
         let mut tracker = Tracker::default();
         let polled = [checkpoint(2, CheckpointState::InProgress), checkpoint(1, CheckpointState::Completed)];
-        let events = tracker.observe(&job(JobState::Running, 5000), &[], Some(0), &polled);
+        let events = tracker.observe(&job(JobState::Running, 5000), &[], Some(0), &polled, 6000);
         let ids = |events: &[Event]| -> Vec<u64> {
             events
                 .iter()
@@ -300,7 +310,7 @@ mod tests {
             checkpoint(2, CheckpointState::Completed),
             checkpoint(1, CheckpointState::Completed),
         ];
-        let events = tracker.observe(&job(JobState::Running, 5000), &[], Some(0), &polled);
+        let events = tracker.observe(&job(JobState::Running, 5000), &[], Some(0), &polled, 6000);
         assert_eq!(ids(&events), [2, 3]);
         let Event::Checkpoint(failed) = &events[1] else { panic!() };
         assert_eq!(failed.status, CheckpointStatus::Failed);
@@ -309,9 +319,15 @@ mod tests {
     #[test]
     fn terminal_runs_are_done() {
         let mut tracker = Tracker::default();
-        tracker.observe(&job(JobState::Running, 5000), &[], Some(0), &[]);
-        let events = tracker.observe(&job(JobState::Canceled, 7000), &[], Some(0), &[]);
+        tracker.observe(&job(JobState::Running, 5000), &[], Some(0), &[], 6000);
+        let events = tracker.observe(&job(JobState::Canceled, 7000), &[], Some(0), &[], 8000);
         assert_eq!(statuses(&events), [(JobState::Canceled, Some(JobState::Running), 0, false)]);
+        // Still polled for a while: the final savepoint can show up late.
+        assert!(!tracker.is_done("jid-1"));
+        let late = [checkpoint(1, CheckpointState::Completed)];
+        let events = tracker.observe(&job(JobState::Canceled, 7000), &[], Some(0), &late, 9000);
+        assert_eq!(events.len(), 1);
+        tracker.observe(&job(JobState::Canceled, 7000), &[], Some(0), &late, 7000 + TERMINAL_GRACE_MS);
         assert!(tracker.is_done("jid-1"));
     }
 }

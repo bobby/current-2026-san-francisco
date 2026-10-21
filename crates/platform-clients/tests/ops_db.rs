@@ -27,6 +27,8 @@ fn checkpoint(id: u64, at: i64, status: CheckpointStatus) -> CheckpointEvent {
         checkpointed_size_bytes: id * 1_000_000,
         state_size_bytes: id * 4_000_000,
         failure_reason: (status == CheckpointStatus::Failed).then(|| "Checkpoint expired before completing.".into()),
+        external_path: (status == CheckpointStatus::Completed)
+            .then(|| format!("s3://flink/checkpoints/jid-1/chk-{id}")),
     }
 }
 
@@ -42,6 +44,9 @@ fn deployment(version: &str, at: i64) -> Deployment {
         commit_sha: "abc1234".into(),
         author: "dana".into(),
         summary: "Track recent fills".into(),
+        args: vec!["--job=positions-aggregator".into()],
+        triggered_by: "director".into(),
+        failure_reason: None,
         outcome: DeploymentOutcome::Succeeded,
         flink_job_id: Some("jid-1".into()),
         restored_from: None,
@@ -134,11 +139,26 @@ async fn job_snapshot_at_a_time(pool: PgPool) {
     assert_eq!(at_120.failed_checkpoints_since, 0);
     assert_eq!(at_120.status.unwrap().status, JobState::Running);
 
+    let restore = db.latest_restore_point("positions-aggregator").await.unwrap().unwrap();
+    assert_eq!(restore.path, "s3://flink/checkpoints/jid-1/chk-4");
+    // Once the run finishes (stop-with-savepoint), Flink deletes its
+    // checkpoints; a deployment's restore point is the newest left.
+    let mut redeploy = deployment("v3", 115);
+    redeploy.restored_from = Some("s3://flink/savepoints/savepoint-jid1-abc".into());
+    db.insert_deployment(&redeploy).await.unwrap();
+    db.insert_job_status(&status(112, JobState::Finished, None)).await.unwrap();
+    let restore = db.latest_restore_point("positions-aggregator").await.unwrap().unwrap();
+    assert_eq!((restore.path.as_str(), restore.ts), ("s3://flink/savepoints/savepoint-jid1-abc", t(115)));
+    assert_eq!(
+        db.deployments_before("positions-aggregator", t(200), 1).await.unwrap()[0].args,
+        ["--job=positions-aggregator"]
+    );
+
     let before_any = db.job_at("positions-aggregator", t(-10)).await.unwrap();
     assert!(before_any.deployment.is_none() && before_any.status.is_none());
 
     assert_eq!(db.deployments_before("positions-aggregator", t(100), 5).await.unwrap().len(), 1);
-    assert_eq!(db.status_between("positions-aggregator", t(0), t(200)).await.unwrap().len(), 2);
+    assert_eq!(db.status_between("positions-aggregator", t(0), t(200)).await.unwrap().len(), 3);
 }
 
 #[sqlx::test(migrator = "platform_clients::ops_db::MIGRATOR")]

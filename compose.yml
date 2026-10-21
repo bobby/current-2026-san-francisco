@@ -35,6 +35,13 @@ x-flink: &flink
     iceberg-rest:
       condition: service_healthy
 
+# The Rust services share one image; each picks its binary with `command`.
+x-services: &services
+  build:
+    context: .
+    dockerfile: services/Dockerfile
+  image: platform/services:latest
+
 services:
   kafka:
     image: apache/kafka:4.2.2
@@ -296,10 +303,7 @@ services:
   # webhook → platform.alerts; Vector → platform.logs; platform.* → ops DB
   # (docs/design.md §5).
   collector:
-    build:
-      context: .
-      dockerfile: services/Dockerfile
-    image: platform/services:latest
+    <<: *services
     command: [collector]
     environment:
       OPS_DATABASE_URL: postgres://ops:${OPS_DB_PASSWORD:-ops}@postgres:5432/ops
@@ -318,6 +322,30 @@ services:
       postgres-init:
         condition: service_completed_successfully
       jobmanager:
+        condition: service_healthy
+
+  # The deployment pipeline: versioned deploys and rollbacks from
+  # jobs/versions.yaml, with deployment events (docs/design.md §4.3).
+  cicd-sim:
+    <<: *services
+    command: [cicd-sim]
+    environment:
+      OPS_DATABASE_URL: postgres://ops:${OPS_DB_PASSWORD:-ops}@postgres:5432/ops
+    volumes:
+      - ./jobs:/jobs:ro
+    ports:
+      - 127.0.0.1:8091:8091
+    mem_limit: 128m
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8091/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    depends_on:
+      # The collector applies the ops DB migrations.
+      collector:
+        condition: service_healthy
+      sql-gateway:
         condition: service_healthy
 
   # Ships the Flink containers' logs to the collector.
