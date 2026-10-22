@@ -81,6 +81,10 @@ services:
     image: ${SERVICES_IMAGE:?}
     build: !reset null
 
+  triage:
+    image: ${SERVICES_IMAGE:?}
+    build: !reset null
+
   mattermost:
     image: ${MATTERMOST_IMAGE:?}
     build: !reset null

@@ -290,8 +290,8 @@
     {
       "id": 5,
       "type": "stat",
-      "title": "Suppressed",
-      "description": "Alert groups the triage agent judged noise.",
+      "title": "Alerts suppressed",
+      "description": "Alerts in groups the triage agent judged transient or expected.",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "ops-db"
@@ -312,7 +312,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT count(*) AS \"suppressed\" FROM signals WHERE disposition = 'suppress' AND $__timeFilter(ts)"
+          "rawSql": "SELECT count(DISTINCT a) AS \"suppressed\" FROM signals, jsonb_array_elements_text(event->'alert_event_ids') a WHERE disposition = 'suppress' AND $__timeFilter(ts)"
         }
       ],
       "options": {

@@ -4,6 +4,8 @@
 !Cargo.lock
 !crates
 !services
+!agents/*/src
+!agents/*/Cargo.toml
 !director/src
 !director/Cargo.toml
 **/target

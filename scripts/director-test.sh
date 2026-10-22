@@ -20,7 +20,6 @@ pass() { printf '  \033[32m✓\033[0m %s\n' "$*"; }
 fail() { printf '  \033[31m✗\033[0m %s\n' "$*" >&2; exit 1; }
 step() { printf '\n%s\n' "$*"; }
 
-cargo build --quiet --release -p director
 director() { scripts/director.sh "$@"; }
 
 for i in 1 2; do
