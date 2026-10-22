@@ -1,6 +1,6 @@
 [package]
 name = "platform-clients"
-description = "Clients for the platform's services: the Flink REST API and SQL Gateway, Kafka and the ops DB."
+description = "Clients for the platform's services: the Flink REST API and SQL Gateway, Kafka, the ops DB, the tickets mock and the chatops-bot."
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true

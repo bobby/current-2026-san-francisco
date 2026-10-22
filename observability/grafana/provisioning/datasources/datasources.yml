@@ -1,0 +1,24 @@
+# Grafana's datasources (docs/design.md §9.3): Prometheus for metrics, and
+# the ops DB, read-only, for alerts, signals, deployments and actions.
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      timeInterval: 15s
+  - name: Ops DB
+    uid: ops-db
+    type: grafana-postgresql-datasource
+    access: proxy
+    url: postgres:5432
+    user: grafana
+    jsonData:
+      database: ops
+      sslmode: disable
+      postgresVersion: 1500
+    secureJsonData:
+      password: ${GRAFANA_DB_PASSWORD}

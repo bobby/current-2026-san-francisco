@@ -295,6 +295,7 @@ services:
       TICKETS_DB_PASSWORD: ${TICKETS_DB_PASSWORD:-tickets}
       MATTERMOST_DB_PASSWORD: ${MATTERMOST_DB_PASSWORD:-mattermost}
       ICEBERG_DB_PASSWORD: ${ICEBERG_DB_PASSWORD:-iceberg}
+      GRAFANA_DB_PASSWORD: ${GRAFANA_DB_PASSWORD:-grafana}
     volumes:
       - ./postgres/databases.sh:/databases.sh:ro
     depends_on:
@@ -420,8 +421,135 @@ services:
       collector:
         condition: service_healthy
 
+  # The human interfaces (docs/design.md §9). Mattermost, built for arm64
+  # from the official release (mattermost/Dockerfile), on the shared Postgres.
+  # The chatops-bot sets up its team, channels and bots.
+  mattermost:
+    build: ./mattermost
+    image: platform/mattermost:11.11.2
+    environment:
+      MM_SQLSETTINGS_DRIVERNAME: postgres
+      MM_SQLSETTINGS_DATASOURCE: postgres://mattermost:${MATTERMOST_DB_PASSWORD:-mattermost}@postgres:5432/mattermost?sslmode=disable&connect_timeout=10
+      MM_SERVICESETTINGS_SITEURL: ${MATTERMOST_PUBLIC_URL:-http://localhost:8065}
+      MM_SERVICESETTINGS_LISTENADDRESS: :8065
+      MM_SERVICESETTINGS_ENABLEBOTACCOUNTCREATION: "true"
+      MM_SERVICESETTINGS_ENABLEUSERACCESSTOKENS: "true"
+      # Lets Mattermost call the chatops-bot when someone clicks a button.
+      MM_SERVICESETTINGS_ALLOWEDUNTRUSTEDINTERNALCONNECTIONS: chatops-bot
+      MM_SERVICESETTINGS_ENABLESECURITYFIXALERT: "false"
+      MM_SERVICESETTINGS_ENABLEONBOARDINGFLOW: "false"
+      # The chatops-bot creates the first user (who becomes the admin)
+      # through open sign-up. Every port binds to 127.0.0.1 only.
+      MM_TEAMSETTINGS_ENABLEOPENSERVER: "true"
+      MM_EMAILSETTINGS_REQUIREEMAILVERIFICATION: "false"
+      MM_EMAILSETTINGS_SENDEMAILNOTIFICATIONS: "false"
+      MM_EMAILSETTINGS_ENABLEPREVIEWMODEBANNER: "false"
+      MM_PLUGINSETTINGS_ENABLE: "false"
+      MM_PLUGINSETTINGS_AUTOMATICPREPACKAGEDPLUGINS: "false"
+      MM_LOGSETTINGS_ENABLEFILE: "false"
+      MM_LOGSETTINGS_CONSOLELEVEL: WARN
+      MM_LOGSETTINGS_ENABLEDIAGNOSTICS: "false"
+      MM_FILESETTINGS_DIRECTORY: /mattermost/data/
+    ports:
+      - 127.0.0.1:8065:8065
+    volumes:
+      - mattermost-data:/mattermost/data
+    mem_limit: 1g
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8065/api/v4/system/ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
+    depends_on:
+      postgres-init:
+        condition: service_completed_successfully
+
+  # The tickets mock: a ServiceNow Table API-shaped incident tracker with a
+  # web UI (docs/design.md §9.2). It tells the chatops-bot about each change.
+  tickets:
+    <<: *services
+    command: [tickets]
+    environment:
+      TICKETS_DATABASE_URL: postgres://tickets:${TICKETS_DB_PASSWORD:-tickets}@postgres:5432/tickets
+      TICKETS_PUBLIC_URL: ${TICKETS_PUBLIC_URL:-http://localhost:8094}
+      NOTIFY_URL: http://chatops-bot:8092/hooks/tickets
+    ports:
+      - 127.0.0.1:8094:8094
+    mem_limit: 128m
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8094/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    depends_on:
+      postgres-init:
+        condition: service_completed_successfully
+
+  # The platform's Mattermost bot (docs/design.md §9.1): card templates and
+  # buttons for the agents, the alert firehose, and ticket cards. Healthy
+  # once the Mattermost workspace is set up.
+  chatops-bot:
+    <<: *services
+    command: [chatops-bot]
+    environment:
+      MATTERMOST_ADMIN_PASSWORD: ${MATTERMOST_ADMIN_PASSWORD:-oncall-demo-2026}
+      GRAFANA_PUBLIC_URL: ${GRAFANA_PUBLIC_URL:-http://localhost:3000}
+      TICKETS_PUBLIC_URL: ${TICKETS_PUBLIC_URL:-http://localhost:8094}
+    ports:
+      - 127.0.0.1:8092:8092
+    mem_limit: 128m
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8092/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+    depends_on:
+      mattermost:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      tickets:
+        condition: service_healthy
+
+  # One dashboard: alerts in vs. signals out, and the starring jobs
+  # annotated with deployments and actions (docs/design.md §9.3). Anyone
+  # can view it without logging in.
+  grafana:
+    image: grafana/grafana:13.2.4
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards/platform-overview.json
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      GF_LOG_LEVEL: warn
+      # Keeps Go's heap under the container limit.
+      GOMEMLIMIT: 384MiB
+      GRAFANA_DB_PASSWORD: ${GRAFANA_DB_PASSWORD:-grafana}
+    ports:
+      - 127.0.0.1:3000:3000
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/etc/grafana/dashboards:ro
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      postgres-init:
+        condition: service_completed_successfully
+
 volumes:
   kafka-data:
   s3-data:
   postgres-data:
   prometheus-data:
+  mattermost-data:
