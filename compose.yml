@@ -42,6 +42,22 @@ x-services: &services
     dockerfile: services/Dockerfile
   image: platform/services:latest
 
+# A fault injector: a short, seeded ShadowTraffic run (see st-fault-*).
+x-st-fault: &st-fault
+  image: shadowtraffic/shadowtraffic:2.3.1
+  profiles: [faults]
+  env_file:
+    - path: shadowtraffic/license.env
+      required: false
+  environment:
+    JAVA_TOOL_OPTIONS: -Xmx384m
+  volumes:
+    - ./shadowtraffic:/config:ro
+  mem_limit: 512m
+  depends_on:
+    kafka:
+      condition: service_healthy
+
 services:
   kafka:
     image: apache/kafka:4.2.2
@@ -115,7 +131,9 @@ services:
       - 127.0.0.1:9001:9001
     volumes:
       - s3-data:/data
-    mem_limit: 512m
+    # RustFS settles at 700-800 MiB with a few hours of commits and
+    # checkpoints; at 512m it was OOM-killed mid-run, stalling every job.
+    mem_limit: 1g
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:9000/health"]
       interval: 5s
@@ -217,6 +235,10 @@ services:
       <<: *flink-env
       FLINK_COMPONENT: sql-gateway
       JVM_ARGS: -Xmx384m
+    volumes:
+      - ./flink/catalogs/local:/opt/flink/catalogs:ro
+      # SQL jobs `ADD JAR` the jobs jar for its functions.
+      - ./jobs/java/target:/jobs/java/target:ro
     ports:
       - 127.0.0.1:8083:8083
     mem_limit: 512m
@@ -267,6 +289,21 @@ services:
       fleet-exporter:
         condition: service_healthy
 
+  # Fault injectors (docs/design.md §4.4, §7.1): short ShadowTraffic runs
+  # that the director starts at scripted moments. The `faults` profile keeps
+  # `make up` from starting them; each stops on its own (maxMs).
+  st-fault-f2:
+    <<: *st-fault
+    command: ["--config", "/config/faults/f2-poison-trade-events.json", "--seed", "${ST_FAULT_SEED:-20261022}"]
+
+  st-fault-f3:
+    <<: *st-fault
+    command: ["--config", "/config/faults/f3-market-data-spike.json", "--seed", "${ST_FAULT_SEED:-20261022}"]
+
+  st-fault-f5:
+    <<: *st-fault
+    command: ["--config", "/config/faults/f5-schema-drift-customer-events.json", "--seed", "${ST_FAULT_SEED:-20261022}"]
+
   postgres:
     image: postgres:18.6
     environment:
@@ -309,6 +346,8 @@ services:
       - --storage.tsdb.path=/prometheus
       - --storage.tsdb.retention.time=2d
       - --web.enable-lifecycle
+      # The director's reset deletes the Flink series (localhost only).
+      - --web.enable-admin-api
     ports:
       - 127.0.0.1:9090:9090
     volumes:

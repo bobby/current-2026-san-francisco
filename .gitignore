@@ -3,3 +3,4 @@
 jobs/java/target/
 shadowtraffic/license.env
 target/
+.director/

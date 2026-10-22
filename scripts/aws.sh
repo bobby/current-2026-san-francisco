@@ -8,6 +8,7 @@
 #   scripts/aws.sh deploy             push images, upload the Compose bundle, start it
 #   scripts/aws.sh exec <command>     run a shell command in /opt/platform on the instance
 #   scripts/aws.sh jobs <args...>     run scripts/jobs.sh on the instance
+#   scripts/aws.sh director <args...> run the director on the instance (reset, run, status, ...)
 #   scripts/aws.sh tunnel             forward the UIs to localhost (needs session-manager-plugin)
 #   scripts/aws.sh shell              open a shell on the instance
 #   scripts/aws.sh stop|start         stop or start the instance (data is kept)
@@ -40,8 +41,8 @@ BUNDLE=(
   flink/catalogs/aws
   jobs/sql jobs/java/target/platform-jobs.jar jobs/versions.yaml
   observability postgres
-  shadowtraffic/inputs.json shadowtraffic/fleet.json shadowtraffic/fleet/roster-cloud.json
-  scripts docs/flink-metrics.md
+  shadowtraffic/inputs.json shadowtraffic/fleet.json shadowtraffic/fleet/roster-cloud.json shadowtraffic/faults
+  director/timeline.yaml scripts docs/flink-metrics.md
 )
 
 die() { echo "error: $*" >&2; exit 1; }
@@ -180,6 +181,9 @@ aws ssm get-parameter --name /$STACK/shadowtraffic/license.env --with-decryption
 aws ecr get-login-password | docker login --username AWS --password-stdin $registry >/dev/null
 docker compose pull --quiet
 docker compose up -d --wait --remove-orphans
+# The director runs on the host, beside docker compose (scripts/director.sh).
+mkdir -p bin && container=\$(docker create $services_image)
+docker cp "\$container:/usr/local/bin/director" bin/director && docker rm "\$container" >/dev/null
 docker compose ps --format 'table {{.Service}}\t{{.Status}}'
 EOF
 )"
@@ -231,6 +235,10 @@ case "${1:-}" in
     shift
     remote "cd $REMOTE_DIR && scripts/jobs.sh $(printf '%q ' "$@")"
     ;;
+  director)
+    shift
+    remote "cd $REMOTE_DIR && scripts/director.sh $(printf '%q ' "$@")"
+    ;;
   tunnel) tunnel ;;
   shell) aws ssm start-session --target "$(instance_id)" ;;
   stop) aws ec2 stop-instances --instance-ids "$(instance_id)" --query 'StoppingInstances[0].CurrentState.Name' --output text ;;
@@ -241,7 +249,7 @@ case "${1:-}" in
     ;;
   teardown) teardown ;;
   *)
-    sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
     exit 1
     ;;
 esac

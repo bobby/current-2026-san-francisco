@@ -167,7 +167,7 @@ The Java jobs reach Kafka and Iceberg through the Table API, using the same clus
 A Rust service (`services/cicd-sim`) that acts as the platform's deployment pipeline:
 
 - A **version catalogue** (`jobs/versions.yaml`) lists each job's versions: version number, commit SHA, author, change summary, and the job args (fault flags). It also gives each job's tenant, owner, tier, maximum parallelism and **baseline** version. cicd-sim re-reads it on every request.
-- **Deploy** = stop-with-savepoint on the running version (if any), then submit the new version from that savepoint. Java versions go through `/jars/upload` + `/jars/:id/run`; SQL versions go through the SQL Gateway with `execution.savepoint.path`. A deploy counts as succeeded once Flink starts the new run, even if it then crashes (F1).
+- **Deploy** = stop-with-savepoint on the running version (if any), then submit the new version from that savepoint. Java versions go through `/jars/upload` + `/jars/:id/run`; SQL versions go through the SQL Gateway with `execution.state-recovery.path` (and `ignore-unclaimed-state`, the equivalent of the jar route's `allowNonRestoredState`). A deploy counts as succeeded once Flink starts the new run, even if it then crashes (F1).
 - **Restore points without a savepoint.** A restart-looping run can't take a savepoint, so cicd-sim cancels it. The new run restores from the newest restore point in the ops DB. Candidates are:
   - completed savepoints;
   - completed checkpoints of runs that didn't finish (Flink deletes a run's checkpoints when it finishes, e.g. after stop-with-savepoint);
@@ -193,6 +193,11 @@ ShadowTraffic runs as several containers, all with `--seed`:
   - The profiles produce the noise of §7.2 and a few genuine problems: a crash loop, a stalled consumer and runaway state growth.
   - A ShadowTraffic generator writes to one topic, and per-topic generators couldn't keep a job's restart, logs, metrics and checkpoints consistent. So `st-fleet` writes each job's steps to the internal `fleet.telemetry` topic, and the **fleet-exporter** (§5.2) fans them out into the same `platform.*` events real jobs produce.
 - **Fault injectors** are short-lived ShadowTraffic runs that the director starts at scripted moments (`maxMs` / `maxEvents`), for example poison records into `trade-events` or a traffic spike into `market-data`. Running separate containers makes fault timing exact, without relying on ShadowTraffic `schedule.stages`, which runs stages one after another.
+  - Each is a Compose service in the `faults` profile (`st-fault-f2`, `-f3`, `-f5`), running `shadowtraffic/faults/<fault>.json`, so `make up` never starts one. Each reuses its topic's record shape from `inputs.json`.
+  - **F2** (`f2-poison-trade-events`): one producer, `oms-apac-1`, sends trade events with `side` abbreviated to `B`/`S`, once a second for 3 minutes. Normal trade events carry a `source` from three other producers, so the bad ones stand out.
+  - **F3** (`f3-market-data-spike`): `market-data` at 450 records/s (about 9× normal) for 10 minutes.
+  - **F5** (`f5-schema-drift-customer-events`, stretch): `customer-events` with `ts` as an ISO-8601 string instead of epoch milliseconds, for 3 minutes. It isn't on the timeline; `director inject f5` starts it.
+- Seeding makes every run repeat exactly, even across the fleet's forks: two runs with the same seed produce the same ordered event stream.
 
 ShadowTraffic can also write Iceberg directly to Glue. We may use that to fill fleet tables for visual realism, but it's optional.
 
@@ -319,10 +324,10 @@ The same Postgres instance hosts the `mattermost`, `tickets` and (locally) `iceb
 | ID | Failure | Injection | Symptoms | Correct diagnosis | Remediation | Autonomy |
 |---|---|---|---|---|---|---|
 | F1 | Bad deploy: NPE on a field that is sometimes null | cicd-sim deploys `payments-enrichment` v(n+1) with `--fault=npe-on-null-field` | Exception storm, restart loop, checkpoints stop | Code regression from the deploy N minutes ago; the previous version was healthy for days | Roll back to v(n) from the last good checkpoint; ticket to the owner for a code fix | **Auto** (Scenario 3) |
-| F2 | Poison records upstream | Fault injector sends malformed records to `trade-events`; a benign deploy of `trade-events-ingest` happened 40 min earlier | Deserialization exceptions, restart loop | **Not** the deploy: exceptions start at the first malformed offset, the deploy's change summary doesn't touch parsing, and the bad records come from one producer | Redeploy the same version with `--on-deser-error=dlq`; ticket to the upstream producer team | **Human-approved** (Scenario 2) |
-| F3 | Traffic spike → backpressure | Fault injector raises `market-data` volume 5–10× | Backpressure, rising checkpoint duration, growing lag; no errors | Under-provisioned for the load; no code or data problem | Rescale parallelism 2→4 (within policy bounds); verify lag drains | **Auto** (Scenario 3) |
+| F2 | Poison records upstream | Fault injector sends malformed records to `trade-events`; a benign deploy of `trade-events-ingest` happened 11 minutes earlier | Deserialization exceptions, restart loop | **Not** the deploy: exceptions start at the first malformed offset, the deploy's change summary doesn't touch parsing, and the bad records come from one producer | Redeploy the same version with `--on-deser-error=dlq`; ticket to the upstream producer team | **Human-approved** (Scenario 2) |
+| F3 | Traffic spike → backpressure | Fault injector raises `market-data` volume about 9×. A 5 ms reference-data lookup per record caps the job at about 200 records/s per subtask, so parallelism 2 falls behind and 3 or more catches up | Backpressure, rising checkpoint duration, growing lag; no errors | Under-provisioned for the load; no code or data problem | Rescale parallelism 2→4 (within policy bounds); verify lag drains | **Auto** (Scenario 3) |
 | F4 | Unbounded state growth | `positions-aggregator` version with `--fault=state-leak` (no state TTL), deployed early in the timeline | Checkpoint size grows steadily and durations grow; eventually TaskManager memory pressure | Needs a code change (state TTL); a restart only buys time | Escalate to the owner with evidence; offer a temporary mitigation (restart with more memory) as a button | **Escalate** (Scenario 3) |
-| F5 | Schema drift breaks the Iceberg write | Input gains a field / changes a type | Sink write or commit failures | Upstream schema change incompatible with the table | Escalate to the owner and upstream team | **Escalate** (stretch goal) |
+| F5 | Schema drift breaks the job | Input changes a type (`ts` becomes a string) | Deserialization failures, restart loop | Upstream schema change incompatible with the table | Escalate to the owner and upstream team | **Escalate** (stretch goal) |
 
 ### 7.2 Fleet noise and hidden true positives (simulated)
 
@@ -369,7 +374,7 @@ Raised signals appear in `#platform-signals` as rich cards showing job, tenant, 
 
 ### 8.2 Scenario 2: human-initiated, agent-assisted (F2)
 
-1. The triage agent raises a signal for `trade-events-ingest`: class `bad_input_data` or `code_regression`, with high impact and a deploy 40 min earlier.
+1. The triage agent raises a signal for `trade-events-ingest`: class `bad_input_data` or `code_regression`, with high impact and a deploy 11 minutes earlier.
 2. An engineer replies in the signal's thread: *"@ops-assistant what's going on here? Was it the deploy?"*
 3. **chatops-bot** passes the thread to Claude Code and streams its progress into the thread as short status lines ("🔎 checking deployment history…", "📈 querying lag for trade-events-ingest…").
 4. Claude investigates through MCP tools:
@@ -459,7 +464,7 @@ services/
 agents/
   triage/                   # Scenario 1
   operator/                 # Scenario 3
-director/                   # demo CLI: reset, run timelines, status
+director/                   # demo CLI: reset, run, status; timeline.yaml
 jobs/
   java/                     # single jar, --job and --fault flags
   sql/
@@ -481,13 +486,32 @@ To save memory and build time, the Rust services ship as one image (`platform/se
 
 ### 10.2 Director
 
-The `director` CLI (Rust):
+The `director` CLI (Rust, `director/`) runs on the host beside `docker compose`, through `scripts/director.sh` (`make reset`, `make run SCENARIO=…`, `make status`). Locally it runs with cargo; on EC2, `make deploy-aws` extracts it from the services image, and `scripts/aws.sh director …` runs it there.
 
-- `reset`: cancel jobs, truncate ops and ticket tables, archive and re-create the Mattermost channels, and redeploy the baseline versions.
-- `run [--scenario 1|2|3|all]`: start the seeded ShadowTraffic containers and execute the timeline (deploys and fault injections at fixed offsets).
-- `status`: show progress through the timeline.
+- `reset` returns the platform to a known starting point, in about two minutes:
+  1. Stop the fault injectors, the input data, the fleet and the fleet-exporter.
+  2. Cancel every Flink job, then move each real job's consumer group (named after the job) to the latest offsets. Each run then starts with no backlog and no leftover fault records, and the jobs start from fresh state.
+  3. Truncate the ops DB's history tables (not the `jobs` registry) and the tickets, which restarts the `INC` numbers.
+  4. Delete Prometheus's Flink series (its admin API is on, bound to localhost), and recreate Prometheus and Alertmanager, so no alert carries over.
+  5. Archive and re-create the Mattermost channels (through the chatops-bot).
+  6. Restart the fleet-exporter, `st-fleet` and `st-inputs` with the timeline's seeds, which restarts the fleet's seeded problems.
+  7. Deploy every job's baseline version.
+- `run [--scenario 1|2|3|all]` first restarts the fleet and the input data with the timeline's seeds, so their seeded behaviour lines up with the timeline's offsets however long the reset took. It then executes the timeline (`director/timeline.yaml`): deploys through cicd-sim and fault injections at fixed offsets. One scenario on its own runs just its steps, shifted to start at once, followed by its settle time. Scenario 1 is the fleet's noise alone.
+- `status` shows progress through the run and the incidents so far. `incidents` lists them: for each real job, its first symptom since the run started (a failure's root cause, or a firing alert), and for each of the fleet's genuine problems, its first failure, in order. The fleet's alerts aren't incidents: the naive rules fire on simulated metrics that hover around their thresholds, so whether one crosses in a given half hour depends on scrape timing rather than the seed. `make director-test` runs two reset-and-run cycles and checks that both list the same incidents in the same order: the same jobs, and the same root cause for each failure. Alert names aren't compared, because rules about one symptom, such as backpressure and slow checkpoints, fire seconds apart in either order.
+- The director waits on wall-clock deadlines, so a laptop that sleeps mid-run runs its overdue steps on waking rather than shifting the whole timeline. Rehearse on the laptop with sleep prevented (e.g. `caffeinate -is make run`).
+- `inject <fault>` starts one fault injector at once, outside the timeline.
 
-The timeline is a YAML file in the repo.
+The full timeline takes 30 minutes:
+
+| At | Scenario | Step |
+|---|---|---|
+| 0:00 | 2 | Deploy `trade-events-ingest` 2.18.0: F2's red herring |
+| 1:00 | 3 | Deploy `positions-aggregator` 0.9.0: F4's state leak starts growing |
+| 11:00 | 2 | Inject F2: poison records from one producer |
+| 15:00 | 3 | Deploy `payments-enrichment` 1.42.0: F1 |
+| 18:00 | 3 | Inject F3: the `market-data` spike, for 10 minutes |
+
+These offsets are a starting point for the timing runs in #12.
 
 ## 11. Resource budget
 

@@ -1,0 +1,89 @@
+{
+  "generators": [
+    {
+      "name": "f5-schema-drift-customer-events",
+      "topic": "customer-events",
+      "vars": {
+        "customer": {
+          "_gen": "string",
+          "expr": "CUST-#{Number.numberBetween '100000','120000'}"
+        }
+      },
+      "key": {
+        "_gen": "var",
+        "var": "customer"
+      },
+      "value": {
+        "event_id": {
+          "_gen": "uuid"
+        },
+        "customer_id": {
+          "_gen": "var",
+          "var": "customer"
+        },
+        "event_type": {
+          "_gen": "weightedOneOf",
+          "choices": [
+            {
+              "weight": 50,
+              "value": "page_view"
+            },
+            {
+              "weight": 20,
+              "value": "login"
+            },
+            {
+              "weight": 10,
+              "value": "search"
+            },
+            {
+              "weight": 8,
+              "value": "statement_download"
+            },
+            {
+              "weight": 7,
+              "value": "transfer_initiated"
+            },
+            {
+              "weight": 5,
+              "value": "support_contact"
+            }
+          ]
+        },
+        "channel": {
+          "_gen": "oneOf",
+          "choices": [
+            "web",
+            "ios",
+            "android",
+            "branch",
+            "call_center"
+          ]
+        },
+        "session_id": {
+          "_gen": "uuid"
+        },
+        "ts": {
+          "_gen": "formatDateTime",
+          "ms": {
+            "_gen": "now"
+          }
+        }
+      },
+      "localConfigs": {
+        "throttleMs": 1000,
+        "maxMs": 180000
+      }
+    }
+  ],
+  "connections": {
+    "kafka": {
+      "kind": "kafka",
+      "producerConfigs": {
+        "bootstrap.servers": "kafka:9092",
+        "key.serializer": "org.apache.kafka.common.serialization.StringSerializer",
+        "value.serializer": "io.shadowtraffic.kafka.serdes.JsonSerializer"
+      }
+    }
+  }
+}

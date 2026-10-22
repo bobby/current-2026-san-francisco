@@ -1,4 +1,5 @@
 .PHONY: up down clean ps logs smoke jobs jobs-submit jobs-cancel jobs-list jobs-test license rust-test telemetry-test cicd-test fleet-test chatops-test \
+	reset run status director-test \
 	stack-aws secrets-aws deploy-aws jobs-submit-aws ps-aws tunnel teardown-aws
 
 MAVEN_IMAGE := maven:3.9.16-eclipse-temurin-17
@@ -68,6 +69,23 @@ cicd-test: jobs
 # the naive alert rules fire on it (issue #5). Waits for alerts to build up.
 fleet-test:
 	./scripts/fleet-test.sh
+
+# The director (issue #7): return the platform to its starting state, run the
+# timeline (SCENARIO=1|2|3|all, default all) and show progress.
+SCENARIO ?= all
+reset:
+	./scripts/director.sh reset
+
+run:
+	./scripts/director.sh run --scenario $(SCENARIO)
+
+status:
+	./scripts/director.sh status
+
+# Two reset-and-run cycles of the timeline produce the same incidents
+# (SCENARIO=all takes about an hour; SCENARIO=3 about 35 minutes).
+director-test: jobs
+	./scripts/director-test.sh $(SCENARIO)
 
 # Mattermost, the chatops-bot's cards and buttons, the tickets mock and
 # Grafana (issue #8).

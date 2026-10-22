@@ -51,6 +51,15 @@ The simulated fleet and alerting (design doc §4.4, §5.2, §5.3):
 - Alert rules live in `observability/prometheus/rules/` and are deliberately naive; Alertmanager's config is in `observability/alertmanager/`. `make up` reloads both configs.
 - `make fleet-test` (`scripts/fleet-test.sh`) checks fleet events, metric label parity with real jobs, and the alert stream. It waits up to 15 minutes for alerts to build up.
 
+The director and fault injection (design doc §4.4, §10.2):
+
+- `make reset` (`scripts/director.sh reset`) returns the platform to its starting state; `make run SCENARIO=1|2|3|all` runs the timeline in `director/timeline.yaml`; `make status` shows progress and the incidents so far. On AWS, `scripts/aws.sh director <command>`.
+- `reset` is destructive: it cancels every job, empties the ops history and the tickets, deletes Prometheus's Flink series and archives the Mattermost channels.
+- A run leaves its faults behind: F2's poison records stay ahead of `trade-events-ingest`'s committed offsets, so a redeploy fails again. `make reset` before `make jobs-test` or other tests.
+- The timeline's offsets and seed are the demo. Change them deliberately, and rerun `make director-test`, which checks that two runs with the same seed produce the same incidents (about an hour for `all`).
+- Fault injectors are Compose services in the `faults` profile (`st-fault-f2`, `-f3`, `-f5`), each running `shadowtraffic/faults/<fault>.json`. `scripts/director.sh inject <fault>` starts one by hand.
+- F3 depends on `market-data-to-iceberg`'s capacity: a 5 ms lookup per record (`QuoteReferenceLookup`, a SQL function from the jobs jar) with operator chaining off. Changing either changes whether the spike backs it up.
+
 Human interfaces (design doc §9):
 
 - Mattermost is built for arm64 from the official release tarball (`mattermost/Dockerfile`); Mattermost publishes amd64 images only. Configuration is `MM_*` variables in `compose.yml`.

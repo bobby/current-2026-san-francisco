@@ -1,0 +1,55 @@
+# The demo timeline (docs/design.md §8, §10.2): every deploy and fault
+# injection, at a fixed offset from the start of `director run`. One
+# continuous run covers all three scenarios, with the noisy fleet always in
+# the background; `director run --scenario N` runs one scenario's steps on
+# their own for rehearsal (shifted to start at once, gaps kept).
+#
+# `seed` seeds every ShadowTraffic run: `director reset` restarts the input
+# data (seed) and the fleet (seed + 1), and the fault injectors use seed + 2.
+# The fleet's own genuine problems (a crash loop, a stalled consumer, state
+# growth) start at seeded times after each reset.
+#
+# Deploys go through cicd-sim (versions from jobs/versions.yaml); faults
+# start the Compose service st-fault-<name> (shadowtraffic/faults/).
+
+seed: 20261020
+
+scenarios:
+  1:
+    title: Amplify signal, suppress noise
+    # Noise only: the fleet's alerts and its genuine problems.
+    settle: 8m
+  2:
+    title: Human-initiated, agent-assisted (F2)
+    settle: 10m
+  3:
+    title: Agent-initiated (F1, F3, F4)
+    settle: 12m
+
+steps:
+  - at: 0s
+    scenario: 2
+    note: "F2's red herring: a benign deploy that doesn't touch parsing"
+    deploy: {job: trade-events-ingest, version: 2.18.0}
+
+  - at: 1m
+    scenario: 3
+    note: "F4: the version that keeps every fill forever; state grows from here"
+    deploy: {job: positions-aggregator, version: 0.9.0}
+
+  - at: 11m
+    scenario: 2
+    note: "F2: one producer (oms-apac-1) sends malformed trade events for 3 minutes"
+    fault: f2
+
+  - at: 15m
+    scenario: 3
+    note: "F1: a regression that dereferences a sometimes-null field"
+    deploy: {job: payments-enrichment, version: 1.42.0}
+
+  - at: 18m
+    scenario: 3
+    note: "F3: market-data at 9x its normal volume for 10 minutes"
+    fault: f3
+
+end: 30m
