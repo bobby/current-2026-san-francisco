@@ -13,6 +13,8 @@ use serde::{Deserialize, Deserializer};
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub model: String,
+    /// Background for every judgment, put in the state as `triage_policy`.
+    pub context: serde_json::Value,
     /// The known-noise list's path, relative to the config file.
     known_noise: PathBuf,
     /// The known-noise notes by job, loaded from `known_noise`.

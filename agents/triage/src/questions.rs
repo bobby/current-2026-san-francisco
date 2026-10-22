@@ -93,15 +93,32 @@ pub fn request(model: &str, evidence: &Evidence) -> anyhow::Result<Request> {
         .with_question(
             "actionable",
             Question::noul_with_criteria(
-                "Do these alerts reflect a genuine, persistent problem with job `job.name` that an operator needs \
-                 to act on? Weigh `alerts` against the job's `status`, `failures`, `checkpoints`, `metrics`, \
-                 `alert_history` and `previous_triage`.",
+                json!({
+                    "question": "Do these alerts reflect a genuine, persistent problem with job `job.name` that an \
+                                 operator needs to act on?",
+                    "compare": ["`alerts`", "`status`", "`failures`", "`checkpoints`", "`metrics`", "`known_noise`"],
+                    "guidance": "`triage_policy` says what this platform's alerts usually mean.",
+                }),
                 NoulCriteria::new(
-                    "The problem persists or is getting worse: the job keeps failing on the same error, has not \
-                     recovered, its checkpoints have stopped completing, or lag or state size keeps growing.",
-                    "The condition is transient or expected: one restart right after a deploy, a single failure the \
-                     job recovered from, a lag spike that is draining, an occasional slow or failed checkpoint, or \
-                     symptoms that match the platform team's `known_noise` note for the job.",
+                    json!({
+                        "what": "A problem that persists or keeps getting worse, of a kind `triage_policy.needs_action` \
+                                 lists.",
+                        "examples": [
+                            "the same exception over and over, the job never staying up",
+                            "lag growing for many minutes while input keeps arriving",
+                            "state size and checkpoint durations climbing steadily",
+                        ],
+                    }),
+                    json!({
+                        "what": "A transient or expected condition, of a kind `triage_policy.usually_noise` lists.",
+                        "not_for": "A failure that keeps repeating, even when its cause is outside the job.",
+                        "examples": [
+                            "one restart after a deploy, then running normally",
+                            "one TaskManager loss the job recovered from",
+                            "a slow checkpoint followed by normal ones",
+                            "symptoms matching the `known_noise` note",
+                        ],
+                    }),
                 ),
             ),
         )

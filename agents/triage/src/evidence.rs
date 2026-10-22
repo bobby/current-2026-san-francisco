@@ -40,6 +40,9 @@ pub struct Gathered {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Evidence {
+    /// What the platform team knows about its alerts (`context` in the
+    /// config).
+    pub triage_policy: serde_json::Value,
     pub job: JobFacts,
     /// The platform team's note, if they triaged this job's alerts as known
     /// noise long ago.
@@ -280,6 +283,7 @@ impl Sources {
             status.recovered_from_latest_failure = Some(recovered_at(&after, config).is_some_and(|t| t <= at));
         }
         let evidence = Evidence {
+            triage_policy: config.context.clone(),
             job: job_facts(job_name, &tenant, registry.as_ref(), snapshot.deployment.as_ref(), at),
             known_noise: config.notes.get(job_name).cloned(),
             alerts: alerts

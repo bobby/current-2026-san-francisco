@@ -95,6 +95,10 @@ enum Command {
         /// Print each judgment's evidence too.
         #[arg(long)]
         evidence: bool,
+        /// Also write each signal, as JSON Lines, to this file (to compare
+        /// question or threshold changes offline).
+        #[arg(long)]
+        out: Option<PathBuf>,
     },
 }
 
@@ -153,7 +157,7 @@ async fn main() -> anyhow::Result<()> {
             });
             run(triage, &kafka_bootstrap_servers, listen_addr).await
         }
-        Command::Replay { from, to, job, evidence } => {
+        Command::Replay { from, to, job, evidence, out } => {
             let jev = jev.context("JEV_API_KEY isn't set")?;
             let triage = Triage {
                 incidents: Mutex::new(Incidents::new(config.incident_ttl)),
@@ -163,7 +167,7 @@ async fn main() -> anyhow::Result<()> {
                 outputs: None,
                 stats: Stats::default(),
             };
-            replay(&triage, from, to, &job, evidence).await
+            replay(&triage, from, to, &job, evidence, out.as_deref()).await
         }
     }
 }
@@ -331,7 +335,9 @@ async fn replay(
     to: DateTime<Utc>,
     jobs: &[String],
     print_evidence: bool,
+    out: Option<&std::path::Path>,
 ) -> anyhow::Result<()> {
+    let mut out = out.map(std::fs::File::create).transpose()?;
     let wanted = |a: &AlertEvent| a.job_name.as_ref().is_some_and(|j| jobs.is_empty() || jobs.contains(j));
     let alerts: Vec<AlertEvent> =
         triage.sources.db.alerts_between(None, from, to).await?.into_iter().filter(|a| wanted(a)).collect();
@@ -384,6 +390,10 @@ async fn replay(
             );
             if print_evidence {
                 println!("{}", serde_json::to_string_pretty(&s.judgment["state"])?);
+            }
+            if let Some(f) = out.as_mut() {
+                use std::io::Write;
+                writeln!(f, "{}", serde_json::to_string(s)?)?;
             }
             watch.judged(&job, at, s.disposition);
             triage.incidents.lock().await.record(s, &v.summary, None);
