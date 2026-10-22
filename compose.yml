@@ -438,6 +438,11 @@ services:
       - 127.0.0.1:9093:9093
     volumes:
       - ./observability/alertmanager:/etc/alertmanager:ro
+    # Its notification log, in memory: in a volume, it would survive the
+    # director's reset, and an alert that was firing before the reset would
+    # count as already notified when it fired again (for 4 h).
+    tmpfs:
+      - /alertmanager:uid=65534,gid=65534
     mem_limit: 128m
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:9093/-/healthy"]
@@ -549,6 +554,39 @@ services:
       kafka-init:
         condition: service_completed_successfully
       tickets:
+        condition: service_healthy
+
+  # The triage agent (Scenario 1, docs/design.md §8.1): turns the alert
+  # firehose into a few signals, with Jev judging the evidence. Without
+  # JEV_API_KEY it stays up but doesn't triage.
+  triage:
+    <<: *services
+    command: [triage, run]
+    environment:
+      OPS_DATABASE_URL: postgres://ops:${OPS_DB_PASSWORD:-ops}@postgres:5432/ops
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      PROMETHEUS_URL: http://prometheus:9090
+      CHATOPS_URL: http://chatops-bot:8092
+      JEV_API_KEY: ${JEV_API_KEY:-}
+      JEV_BASE_URL: ${JEV_BASE_URL:-https://api.typesafe.ai}
+      TRIAGE_CONFIG: /etc/triage/triage.yaml
+    volumes:
+      - ./agents/triage/triage.yaml:/etc/triage/triage.yaml:ro
+      - ./agents/triage/known-noise.yaml:/etc/triage/known-noise.yaml:ro
+    ports:
+      - 127.0.0.1:8093:8093
+    mem_limit: 128m
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8093/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    depends_on:
+      collector:
+        condition: service_healthy
+      chatops-bot:
+        condition: service_healthy
+      prometheus:
         condition: service_healthy
 
   # One dashboard: alerts in vs. signals out, and the starring jobs

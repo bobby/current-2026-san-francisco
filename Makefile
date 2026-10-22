@@ -1,5 +1,5 @@
 .PHONY: up down clean ps logs smoke jobs jobs-submit jobs-cancel jobs-list jobs-test license rust-test telemetry-test cicd-test fleet-test chatops-test \
-	reset run status director-test \
+	reset run status director-test triage-test \
 	stack-aws secrets-aws deploy-aws jobs-submit-aws ps-aws tunnel teardown-aws
 
 MAVEN_IMAGE := maven:3.9.16-eclipse-temurin-17
@@ -91,6 +91,10 @@ director-test: jobs
 # Grafana (issue #8).
 chatops-test:
 	./scripts/chatops-test.sh
+
+# Scenario 1 on the scripted timeline: about 35 minutes; needs JEV_API_KEY.
+triage-test: jobs
+	./scripts/triage-test.sh
 
 license:
 	@test -f shadowtraffic/license.env || { \

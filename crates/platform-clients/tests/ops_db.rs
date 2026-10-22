@@ -102,6 +102,9 @@ async fn checkpoint_history_before_a_time(pool: PgPool) {
     let limited = db.checkpoints_before("positions-aggregator", t(100), 2).await.unwrap();
     assert_eq!(limited.iter().map(|c| c.checkpoint_id).collect::<Vec<_>>(), [4, 3]);
     assert!(db.checkpoints_before("other-job", t(100), 10).await.unwrap().is_empty());
+
+    let between = db.checkpoints_between("positions-aggregator", t(20), t(40)).await.unwrap();
+    assert_eq!(between.iter().map(|c| c.checkpoint_id).collect::<Vec<_>>(), [2, 3]);
 }
 
 #[sqlx::test(migrator = "platform_clients::ops_db::MIGRATOR")]
@@ -239,6 +242,11 @@ async fn jobs_alerts_signals_and_actions(pool: PgPool) {
         judgment: serde_json::json!({"answers": {"actionable": 0.97}}),
     };
     db.insert_signal(&signal).await.unwrap();
+    assert_eq!(
+        db.signals_between(Some("payments-enrichment"), t(0), t(10)).await.unwrap(),
+        std::slice::from_ref(&signal)
+    );
+    assert!(db.signals_between(None, t(7), t(10)).await.unwrap().is_empty());
     let action = ActionEvent {
         event_id: event_id(&["action", "1", "proposed"]),
         ts: t(7),

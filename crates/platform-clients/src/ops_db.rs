@@ -425,6 +425,37 @@ impl OpsDb {
         rows.into_iter().map(TryInto::try_into).collect()
     }
 
+    /// Triage signals in `[from, to)`, for one job or all, oldest first.
+    pub async fn signals_between(&self, job_name: Option<&str>, from: Timestamp, to: Timestamp) -> Result<Vec<Signal>> {
+        let rows: Vec<(Json<Signal>,)> = sqlx::query_as(
+            "SELECT event FROM signals WHERE ($1::text IS NULL OR job_name = $1) AND ts >= $2 AND ts < $3 ORDER BY ts",
+        )
+        .bind(job_name)
+        .bind(from)
+        .bind(to)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|(Json(s),)| s).collect())
+    }
+
+    /// The job's checkpoints that finished in `[from, to)`, oldest first.
+    pub async fn checkpoints_between(
+        &self,
+        job_name: &str,
+        from: Timestamp,
+        to: Timestamp,
+    ) -> Result<Vec<CheckpointEvent>> {
+        let rows: Vec<CheckpointRow> = sqlx::query_as(
+            "SELECT * FROM checkpoints WHERE job_name = $1 AND ts >= $2 AND ts < $3 ORDER BY ts, checkpoint_id",
+        )
+        .bind(job_name)
+        .bind(from)
+        .bind(to)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(TryInto::try_into).collect()
+    }
+
     /// The job's state as of `at`: latest status, deployment and completed
     /// checkpoint, and how many checkpoints have failed since.
     pub async fn job_at(&self, job_name: &str, at: Timestamp) -> Result<JobSnapshot> {

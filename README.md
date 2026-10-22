@@ -40,6 +40,7 @@ make jobs-test    # every job commits to Iceberg; every fault fails as designed 
 make telemetry-test  # job status, checkpoints, logs and alerts reach Kafka and the ops DB
 make fleet-test   # the simulated fleet looks like real jobs; the naive alerts flow (~15 min)
 make chatops-test # Mattermost cards and buttons, the tickets mock and Grafana
+make triage-test  # Scenario 1 on the scripted timeline: faults raised, noise suppressed (~35 min; needs JEV_API_KEY)
 make reset        # return the platform to its starting state (~2 min)
 make run          # run the scripted demo timeline (SCENARIO=1|2|3|all; all takes 30 min)
 make status       # progress through the run, and the incidents so far
@@ -67,7 +68,7 @@ scripts/jobs.sh list
 scripts/jobs.sh cancel positions-aggregator
 ```
 
-Then open the Flink UI at http://localhost:8081, Prometheus at http://localhost:9090, Alertmanager at http://localhost:9093, and the RustFS console at http://localhost:9001. The human interfaces are Mattermost at http://localhost:8065 (log in as `oncall`, password `oncall-demo-2026`), the Grafana dashboard at http://localhost:3000 (no login needed) and the tickets UI at http://localhost:8094. Copy `.env.example` to `.env` to override the defaults.
+Then open the Flink UI at http://localhost:8081, Prometheus at http://localhost:9090, Alertmanager at http://localhost:9093, and the RustFS console at http://localhost:9001. The human interfaces are Mattermost at http://localhost:8065 (log in as `oncall`, password `oncall-demo-2026`), the Grafana dashboard at http://localhost:3000 (no login needed) and the tickets UI at http://localhost:8094. Copy `.env.example` to `.env` to override the defaults, and put `JEV_API_KEY` there for the triage agent; its counters are at http://localhost:8093/stats.
 
 #### Running on AWS
 

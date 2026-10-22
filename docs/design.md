@@ -280,7 +280,7 @@ About 1,000 jobs × about 25 series is roughly 25k series, which Prometheus hand
 
 ### 5.3 Alerting
 
-Prometheus alert rules (`observability/prometheus/rules/flink-jobs.yml`) feed Alertmanager. The rules are `FlinkJobRestarted`, `FlinkJobNotRunning`, `FlinkCheckpointFailed`, `FlinkCheckpointSlow`, `FlinkConsumerLagHigh` and `FlinkBackpressure`. Alertmanager groups by alert and job and sends everything, firing and resolved, to the collector's webhook, which publishes to `platform.alerts`.
+Prometheus alert rules (`observability/prometheus/rules/flink-jobs.yml`) feed Alertmanager. The rules are `FlinkJobRestarted`, `FlinkJobNotRunning`, `FlinkCheckpointFailed`, `FlinkCheckpointSlow`, `FlinkCheckpointSizeHigh` (over 50 MB, which F4's growing state crosses about 12 minutes after its deploy), `FlinkConsumerLagHigh` and `FlinkBackpressure`. Alertmanager groups by alert and job and sends everything, firing and resolved, to the collector's webhook, which publishes to `platform.alerts`.
 
 The rules are **deliberately naive**, the kind of static thresholds every platform starts with, so the fleet produces a realistic stream of false positives. That stream is shown raw in `#platform-alerts` in Mattermost: this is the "before" picture.
 
@@ -350,6 +350,8 @@ In the fleet (`shadowtraffic/fleet/generate.py`), each job has one profile:
 
 With 200 local jobs the naive rules fire a few alerts a minute, and genuine problems are a small minority of them.
 
+The flappers and peaky jobs are the platform team's "known noise": the generator also writes a note for each (`agents/triage/known-noise.yaml`), describing its expected symptom, as a team that triaged them long ago would have. A director reset empties the ops DB, so that history can't come from earlier signals.
+
 ## 8. Scenarios
 
 All three scenarios run on a single continuous timeline that the director drives, so the noisy fleet is always in the background. The director can also run each scenario on its own for rehearsal.
@@ -370,7 +372,18 @@ All three scenarios run on a single continuous timeline that the director drives
 
 Raised signals appear in `#platform-signals` as rich cards showing job, tenant, class, impact, probabilities, related deploy and a link to the evidence.
 
-**What the audience sees:** `#platform-alerts` scrolling non-stop next to a calm `#platform-signals`, plus a counter (in Grafana or a pinned Mattermost post) of alerts in, signals out and alerts suppressed.
+**What the audience sees:** `#platform-alerts` scrolling non-stop next to a calm `#platform-signals`, plus Grafana's counters of alerts in, signals raised, groups attached and alerts suppressed.
+
+How the agent works:
+
+- **Grouping.** A job's first firing alert opens a group, and the group is judged `group_window` (45 s) later with every alert for the job that arrived meanwhile, so a storm of rules about one problem is one judgment. A job's groups are judged one at a time, in order.
+- **Settling.** A job that failed less than `settle` (2 min) before its group is due is judged once it has recovered, meaning RUNNING for `recovery` (60 s) without failing again, or at the 2-minute cap if it hasn't. A transient restart is judged after the fact. A job that failed three times or more in that time is in a restart loop and is judged at once.
+- **Rechecks.** Alertmanager reports an alert once, when it starts firing, so a slowly worsening problem (state growth, a stalled consumer) may look harmless when first judged. When a job's latest verdict was `suppress` and its alerts are still firing, it is judged again after `recheck` (5 min), then 10, 20 and so on, until the alerts resolve or it's raised. A new alert for the job starts the backoff over. A judgment that fails (Jev's API timing out, say) is retried up to three times.
+- **Evidence.** It is computed in code, as of the judgment's time and relative to it: the job's identity and tier; the alerts in the group; the job's alert history; status, failures grouped by root cause and whether it recovered; the most frequent log warnings; checkpoint counts, durations (the last 5 minutes' median and slowest against earlier) and state growth; lag, backpressure, and input rate and its ratio to 15 minutes earlier, from Prometheus; deployments in the last 2 hours (without their job arguments, which carry the fault flags); the job's earlier verdicts; and the open incidents for the job or its tenant.
+- **Known noise.** The "known noisy" jobs of §7.2 come with the platform team's note: what the expected symptom looks like, and who triaged it when (`agents/triage/known-noise.yaml`, generated with the fleet). Jev compares the note with the evidence, so a known-noisy job with a different problem still stands out.
+- **Policy.** Attach when `same_incident` picks an open incident with probability ≥ 0.5. Otherwise suppress when `transient_or_expected` has probability ≥ 0.5. Otherwise raise when `actionable` ≥ 0.6; or ≥ 0.35 with a user-impact score ≥ 2.5 of 3; or ≥ 0.4 when the failure class is one only a fix resolves (code regression, bad input data, state growth, schema mismatch) with probability ≥ 0.7. On the timeline the real problems score 0.85–0.92 and the noise mostly under 0.3, with a few one-off checkpoint failures and flaps between 0.5 and 0.7. Otherwise suppress. An incident stays open for 30 minutes after its latest signal. The thresholds live in `agents/triage/triage.yaml`.
+- **Output.** Raised signals get a card in `#platform-signals`; attached ones go in their incident's thread; suppressed ones stay out of chat. The card's one-line summary is a code template over the evidence.
+- **Tuning.** `triage replay --from … --to …` re-judges a past window's alerts from the ops DB and Prometheus without side effects, counting its own earlier verdicts as history. `make triage-test` runs the whole timeline and checks the outcome.
 
 ### 8.2 Scenario 2: human-initiated, agent-assisted (F2)
 
@@ -489,13 +502,14 @@ To save memory and build time, the Rust services ship as one image (`platform/se
 The `director` CLI (Rust, `director/`) runs on the host beside `docker compose`, through `scripts/director.sh` (`make reset`, `make run SCENARIO=…`, `make status`). Locally it runs with cargo; on EC2, `make deploy-aws` extracts it from the services image, and `scripts/aws.sh director …` runs it there.
 
 - `reset` returns the platform to a known starting point, in about two minutes:
-  1. Stop the fault injectors, the input data, the fleet and the fleet-exporter.
-  2. Cancel every Flink job, then move each real job's consumer group (named after the job) to the latest offsets. Each run then starts with no backlog and no leftover fault records, and the jobs start from fresh state.
+  1. Stop the fault injectors, the input data, the fleet, the fleet-exporter and the triage agent.
+  2. Cancel every Flink job, then move each real job's consumer group (named after the job), and the triage agent's, to the latest offsets. Each run then starts with no backlog and no leftover fault records or alerts, and the jobs start from fresh state.
   3. Truncate the ops DB's history tables (not the `jobs` registry) and the tickets, which restarts the `INC` numbers.
-  4. Delete Prometheus's Flink series (its admin API is on, bound to localhost), and recreate Prometheus and Alertmanager, so no alert carries over.
+  4. Delete Prometheus's Flink series (its admin API is on, bound to localhost), and recreate Prometheus and Alertmanager, so no alert carries over. Alertmanager's notification log is in memory: kept in a volume, it would treat an alert that was firing before the reset as already notified when it fired again.
   5. Archive and re-create the Mattermost channels (through the chatops-bot).
   6. Restart the fleet-exporter, `st-fleet` and `st-inputs` with the timeline's seeds, which restarts the fleet's seeded problems.
   7. Deploy every job's baseline version.
+  8. Start the triage agent, with no open incidents.
 - `run [--scenario 1|2|3|all]` first restarts the fleet and the input data with the timeline's seeds, so their seeded behaviour lines up with the timeline's offsets however long the reset took. It then executes the timeline (`director/timeline.yaml`): deploys through cicd-sim and fault injections at fixed offsets. One scenario on its own runs just its steps, shifted to start at once, followed by its settle time. Scenario 1 is the fleet's noise alone.
 - `status` shows progress through the run and the incidents so far. `incidents` lists them: for each real job, its first symptom since the run started (a failure's root cause, or a firing alert), and for each of the fleet's genuine problems, its first failure, in order. The fleet's alerts aren't incidents: the naive rules fire on simulated metrics that hover around their thresholds, so whether one crosses in a given half hour depends on scrape timing rather than the seed. `make director-test` runs two reset-and-run cycles and checks that both list the same incidents in the same order: the same jobs, and the same root cause for each failure. Alert names aren't compared, because rules about one symptom, such as backpressure and slow checkpoints, fire seconds apart in either order.
 - The director waits on wall-clock deadlines, so a laptop that sleeps mid-run runs its overdue steps on waking rather than shifting the whole timeline. Rehearse on the laptop with sleep prevented (e.g. `caffeinate -is make run`).

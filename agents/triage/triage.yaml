@@ -1,0 +1,55 @@
+# The triage agent's tuning (docs/design.md §8.1). Thresholds were tuned
+# against the director's timeline (`make triage-test`); change them together
+# with a rerun of it.
+
+# Jev's model name or alias (GET /v1/models). The base URL and key come from
+# JEV_BASE_URL and JEV_API_KEY.
+model: jev-latest
+
+# The platform team's notes on known-noisy jobs (generated with the fleet;
+# docs/design.md §7.2), relative to this file.
+known_noise: known-noise.yaml
+
+# How long to gather a job's alerts before judging them together, so a storm
+# of rules about one problem is one judgment.
+group_window: 45s
+# A job counts as recovered from a failure once it has been RUNNING this
+# long without failing again.
+recovery: 60s
+# A job that failed more recently than this is judged once it has recovered,
+# or this long after the failure if it hasn't, so a transient restart is
+# judged after the fact.
+settle: 2m
+# A job whose latest verdict was `suppress` but whose alerts are still
+# firing is judged again after this long, then after twice as long, and so
+# on: Alertmanager reports an alert once, and a slowly worsening problem may
+# have looked harmless the first time.
+recheck: 5m
+# How far back the evidence looks: failures, checkpoints, alerts, deploys.
+history: 30m
+# A deployment this recent is in the evidence, and `deploy_related` is asked.
+deploy_window: 2h
+# An incident stays open this long after its latest signal; later alerts on
+# the job or tenant can attach to it while it's open.
+incident_ttl: 30m
+# Jev requests in flight at once.
+max_concurrent: 4
+
+policy:
+  # Raise when Jev's `actionable` is at least this...
+  raise: 0.6
+  # ...or when it's at least `impact_raise` and the user-impact score is at
+  # least `impact` (0 none, 1 slight delay, 2 stale data, 3 stopped).
+  impact_raise: 0.35
+  impact: 2.5
+  # ...or when the failure class is one only a fix resolves (code
+  # regression, bad input data, state growth, schema mismatch) with at least
+  # `fix_class` probability, and `actionable` is at least `fix_class_raise`.
+  fix_class: 0.7
+  fix_class_raise: 0.4
+  # Never raise when `transient_or_expected` is the failure class with at
+  # least this probability.
+  transient_veto: 0.5
+  # Attach to an open incident when Jev picks it with at least this
+  # probability.
+  attach: 0.5

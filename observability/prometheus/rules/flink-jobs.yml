@@ -44,6 +44,15 @@ groups:
           summary: "{{ $labels.job_name }} checkpoint took over 10 s"
           description: "Last checkpoint took {{ $value | humanize }} ms."
 
+      - alert: FlinkCheckpointSizeHigh
+        expr: flink_jobmanager_job_lastCheckpointSize > 50e6
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.job_name }} checkpoints over 50 MB"
+          description: "Last checkpoint was {{ $value | humanize1024 }}B."
+
       - alert: FlinkConsumerLagHigh
         expr: sum by (job_id, job_name) (flink_taskmanager_job_task_operator_pendingRecords) > 50000
         for: 1m

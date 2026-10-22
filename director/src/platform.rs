@@ -146,9 +146,9 @@ impl Platform {
         anyhow::bail!("Flink jobs still running a minute after cancelling them")
     }
 
-    /// Moves a job's consumer group (named after the job) to the end of its
+    /// Moves a consumer group (a job's is named after it) to the end of its
     /// topics, so the next run starts with no backlog and no leftover fault
-    /// records.
+    /// records or alerts.
     pub async fn skip_to_latest(&self, group: &str) -> anyhow::Result<()> {
         self.compose(
             &[],

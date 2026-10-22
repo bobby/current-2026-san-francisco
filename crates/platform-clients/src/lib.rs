@@ -5,6 +5,7 @@ pub mod chatops;
 pub mod flink;
 pub mod kafka;
 pub mod ops_db;
+pub mod prometheus;
 pub mod sql_gateway;
 pub mod stack_trace;
 pub mod tickets;
