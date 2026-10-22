@@ -235,7 +235,9 @@ async fn run(triage: Arc<Triage>, bootstrap_servers: &str, listen_addr: SocketAd
                 let now = Utc::now();
                 let mut due: Vec<(String, Vec<AlertEvent>)> =
                     grouper.due(now, &busy).into_iter().map(|d| (d.job_name, d.alerts)).collect();
-                due.extend(watch.due(now, &busy, &grouper));
+                // A job whose new group is due now isn't rechecked as well.
+                let dispatching: HashSet<String> = busy.iter().chain(due.iter().map(|(j, _)| j)).cloned().collect();
+                due.extend(watch.due(now, &dispatching, &grouper));
                 for (job, alerts) in due {
                     busy.insert(job.clone());
                     spawn_judgment(triage.clone(), permits.clone(), done_tx.clone(), job, alerts);
@@ -349,7 +351,8 @@ async fn replay(
         }
         let mut due: Vec<(String, Vec<AlertEvent>, DateTime<Utc>)> =
             grouper.due(now, &HashSet::new()).into_iter().map(|d| (d.job_name, d.alerts, d.due)).collect();
-        due.extend(watch.due(now, &HashSet::new(), &grouper).into_iter().map(|(j, a)| (j, a, now)));
+        let dispatching: HashSet<String> = due.iter().map(|(j, _, _)| j.clone()).collect();
+        due.extend(watch.due(now, &dispatching, &grouper).into_iter().map(|(j, a)| (j, a, now)));
         for (job, group, due_at) in due {
             let at = triage.sources.settled(&triage.config, &job, due_at, Utc::now()).await?.unwrap_or(due_at);
             let v = match triage.judge(&job, &group, &verdicts, at).await {

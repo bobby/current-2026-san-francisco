@@ -499,7 +499,7 @@ To save memory and build time, the Rust services ship as one image (`platform/se
 
 ### 10.2 Director
 
-The `director` CLI (Rust, `director/`) runs on the host beside `docker compose`, through `scripts/director.sh` (`make reset`, `make run SCENARIO=…`, `make status`). Locally it runs with cargo; on EC2, `make deploy-aws` extracts it from the services image, and `scripts/aws.sh director …` runs it there.
+The `director` CLI (Rust, `director/`) runs on the host beside `docker compose`, through `scripts/director.sh` (`make reset`, `make run SCENARIO=…`, `make status`). Locally it runs with cargo. On EC2, `scripts/aws.sh director …` runs it from the services image in a container, with the host's Docker CLI, Compose plugin and socket: the image is built against a newer glibc than Amazon Linux's, so the binary can't run on the host itself.
 
 - `reset` returns the platform to a known starting point, in about two minutes:
   1. Stop the fault injectors, the input data, the fleet, the fleet-exporter and the triage agent.

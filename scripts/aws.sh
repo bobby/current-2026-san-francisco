@@ -181,9 +181,6 @@ aws ssm get-parameter --name /$STACK/shadowtraffic/license.env --with-decryption
 aws ecr get-login-password | docker login --username AWS --password-stdin $registry >/dev/null
 docker compose pull --quiet
 docker compose up -d --wait --remove-orphans
-# The director runs on the host, beside docker compose (scripts/director.sh).
-mkdir -p bin && container=\$(docker create $services_image)
-docker cp "\$container:/usr/local/bin/director" bin/director && docker rm "\$container" >/dev/null
 docker compose ps --format 'table {{.Service}}\t{{.Status}}'
 EOF
 )"
