@@ -1,0 +1,23 @@
+[package]
+name = "director"
+description = "The demo director: resets the platform and runs the scripted, seeded timeline of deploys and fault injections (docs/design.md §10.2)."
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+platform-clients.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+clap.workspace = true
+humantime.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml_ng.workspace = true
+sqlx.workspace = true
+tokio = { workspace = true, features = ["process"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true

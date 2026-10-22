@@ -1,0 +1,100 @@
+{
+  "generators": [
+    {
+      "name": "f2-poison-trade-events",
+      "topic": "trade-events",
+      "vars": {
+        "account": {
+          "_gen": "string",
+          "expr": "ACC-#{Number.numberBetween '1000','1100'}"
+        }
+      },
+      "key": {
+        "_gen": "var",
+        "var": "account"
+      },
+      "value": {
+        "trade_id": {
+          "_gen": "uuid"
+        },
+        "account_id": {
+          "_gen": "var",
+          "var": "account"
+        },
+        "instrument": {
+          "_gen": "oneOf",
+          "choices": [
+            "AAPL",
+            "MSFT",
+            "NVDA",
+            "AMZN",
+            "GOOGL",
+            "JPM",
+            "GS",
+            "XOM",
+            "TSLA",
+            "META",
+            "BRK.B",
+            "V",
+            "UNH",
+            "JNJ",
+            "WMT"
+          ]
+        },
+        "side": {
+          "_gen": "oneOf",
+          "choices": [
+            "B",
+            "S"
+          ]
+        },
+        "quantity": {
+          "_gen": "normalDistribution",
+          "mean": 300,
+          "sd": 250,
+          "clamp": [
+            1,
+            5000
+          ],
+          "decimals": 0
+        },
+        "price": {
+          "_gen": "uniformDistribution",
+          "bounds": [
+            20,
+            900
+          ],
+          "decimals": 2
+        },
+        "venue": {
+          "_gen": "oneOf",
+          "choices": [
+            "XNYS",
+            "XNAS",
+            "ARCX",
+            "BATS",
+            "IEXG"
+          ]
+        },
+        "executed_at": {
+          "_gen": "now"
+        },
+        "source": "oms-apac-1"
+      },
+      "localConfigs": {
+        "throttleMs": 1000,
+        "maxMs": 180000
+      }
+    }
+  ],
+  "connections": {
+    "kafka": {
+      "kind": "kafka",
+      "producerConfigs": {
+        "bootstrap.servers": "kafka:9092",
+        "key.serializer": "org.apache.kafka.common.serialization.StringSerializer",
+        "value.serializer": "io.shadowtraffic.kafka.serdes.JsonSerializer"
+      }
+    }
+  }
+}

@@ -361,8 +361,8 @@ impl Deployer {
                 let script = tokio::fs::read_to_string(&path).await?;
                 let mut statements = Vec::new();
                 if let Some(path) = restore_from {
-                    statements.push(format!("SET 'execution.savepoint.path' = '{path}'"));
-                    statements.push("SET 'execution.savepoint.ignore-unclaimed-state' = 'true'".to_string());
+                    statements.push(format!("SET 'execution.state-recovery.path' = '{path}'"));
+                    statements.push("SET 'execution.state-recovery.ignore-unclaimed-state' = 'true'".to_string());
                 }
                 statements.extend(sql_gateway::statements(&script));
                 self.gateway

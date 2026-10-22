@@ -33,6 +33,14 @@ rest:
 parallelism:
   default: 1
 
+# commons-logging (on the cluster classpath, used by the S3 and HTTP clients)
+# looks up resources through a thread's context classloader. Pooled threads
+# can keep a cancelled job's classloader as theirs, and Flink's leak check then
+# fails whichever job touches it next, at random: a redeploy elsewhere would
+# fail an unrelated job. The threads only use it to look for logging config.
+classloader:
+  check-leaked-classloader: false
+
 state:
   backend:
     type: hashmap

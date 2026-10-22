@@ -204,6 +204,14 @@
         },
         "executed_at": {
           "_gen": "now"
+        },
+        "source": {
+          "_gen": "oneOf",
+          "choices": [
+            "oms-us-1",
+            "oms-us-2",
+            "oms-eu-1"
+          ]
         }
       },
       "localConfigs": {

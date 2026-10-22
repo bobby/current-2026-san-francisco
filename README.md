@@ -40,6 +40,9 @@ make jobs-test    # every job commits to Iceberg; every fault fails as designed 
 make telemetry-test  # job status, checkpoints, logs and alerts reach Kafka and the ops DB
 make fleet-test   # the simulated fleet looks like real jobs; the naive alerts flow (~15 min)
 make chatops-test # Mattermost cards and buttons, the tickets mock and Grafana
+make reset        # return the platform to its starting state (~2 min)
+make run          # run the scripted demo timeline (SCENARIO=1|2|3|all; all takes 30 min)
+make status       # progress through the run, and the incidents so far
 make rust-test    # Rust unit tests and ops DB tests (needs a Rust toolchain)
 make down         # stop (keep data); `make clean` also deletes volumes
 ```
@@ -79,7 +82,7 @@ make tunnel           # forward the Flink UI, SQL Gateway, Prometheus, Mattermos
 make teardown-aws     # delete everything: stack, bucket contents, images, secrets
 ```
 
-`scripts/aws.sh` has more subcommands: `exec <command>` and `jobs <args>` run on the instance over SSM Run Command, `shell` opens a session, and `stop`/`start` park the instance between rehearsals. Stop the local stack before `make tunnel`, because both use the same ports.
+`scripts/aws.sh` has more subcommands: `exec <command>`, `jobs <args>` and `director <args>` (e.g. `director reset`) run on the instance over SSM Run Command, `shell` opens a session, and `stop`/`start` park the instance between rehearsals. Stop the local stack before `make tunnel`, because both use the same ports.
 
 ### A Real Flink Platform
 

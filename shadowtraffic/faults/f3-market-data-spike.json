@@ -1,0 +1,125 @@
+{
+  "generators": [
+    {
+      "name": "f3-market-data-spike",
+      "topic": "market-data",
+      "vars": {
+        "symbol": {
+          "_gen": "oneOf",
+          "choices": [
+            "AAPL",
+            "MSFT",
+            "NVDA",
+            "AMZN",
+            "GOOGL",
+            "JPM",
+            "GS",
+            "XOM",
+            "TSLA",
+            "META",
+            "BRK.B",
+            "V",
+            "UNH",
+            "JNJ",
+            "WMT"
+          ]
+        },
+        "mid": {
+          "_gen": "uniformDistribution",
+          "bounds": [
+            20,
+            900
+          ],
+          "decimals": 2
+        },
+        "half_spread": {
+          "_gen": "uniformDistribution",
+          "bounds": [
+            0.01,
+            0.25
+          ],
+          "decimals": 2
+        }
+      },
+      "key": {
+        "_gen": "var",
+        "var": "symbol"
+      },
+      "value": {
+        "symbol": {
+          "_gen": "var",
+          "var": "symbol"
+        },
+        "venue": {
+          "_gen": "oneOf",
+          "choices": [
+            "XNYS",
+            "XNAS",
+            "ARCX",
+            "BATS",
+            "IEXG"
+          ]
+        },
+        "bid": {
+          "_gen": "subtract",
+          "args": [
+            {
+              "_gen": "var",
+              "var": "mid"
+            },
+            {
+              "_gen": "var",
+              "var": "half_spread"
+            }
+          ],
+          "decimals": 2
+        },
+        "ask": {
+          "_gen": "add",
+          "args": [
+            {
+              "_gen": "var",
+              "var": "mid"
+            },
+            {
+              "_gen": "var",
+              "var": "half_spread"
+            }
+          ],
+          "decimals": 2
+        },
+        "last": {
+          "_gen": "var",
+          "var": "mid"
+        },
+        "size": {
+          "_gen": "normalDistribution",
+          "mean": 400,
+          "sd": 300,
+          "clamp": [
+            1,
+            10000
+          ],
+          "decimals": 0
+        },
+        "ts": {
+          "_gen": "now"
+        }
+      },
+      "localConfigs": {
+        "throughput": 450,
+        "maxMs": 600000
+      }
+    }
+  ],
+  "connections": {
+    "kafka": {
+      "kind": "kafka",
+      "producerConfigs": {
+        "bootstrap.servers": "kafka:9092",
+        "key.serializer": "org.apache.kafka.common.serialization.StringSerializer",
+        "value.serializer": "io.shadowtraffic.kafka.serdes.JsonSerializer"
+      }
+    }
+  }
+}
