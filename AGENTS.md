@@ -51,14 +51,23 @@ The simulated fleet and alerting (design doc §4.4, §5.2, §5.3):
 - Alert rules live in `observability/prometheus/rules/` and are deliberately naive; Alertmanager's config is in `observability/alertmanager/`. `make up` reloads both configs.
 - `make fleet-test` (`scripts/fleet-test.sh`) checks fleet events, metric label parity with real jobs, and the alert stream. It waits up to 15 minutes for alerts to build up.
 
-Local endpoints (all bound to 127.0.0.1): Flink UI/REST `:8081`, SQL Gateway `:8083`, Prometheus `:9090`, Kafka `:9094` (inside Compose, `kafka:9092`), Iceberg REST catalog `:8181`, RustFS S3 API `:9000` and console `:9001`, Postgres `:5432`, collector `:8090`, cicd-sim `:8091`, fleet-exporter `:9249`, Alertmanager `:9093`.
+Human interfaces (design doc §9):
+
+- Mattermost is built for arm64 from the official release tarball (`mattermost/Dockerfile`); Mattermost publishes amd64 images only. Configuration is `MM_*` variables in `compose.yml`.
+- The **chatops-bot** is the only Mattermost client. On every start it sets up, idempotently, the `oncall` admin (people log in as it), the `platform` team, the three channels and five bot accounts (`alertmanager`, `tickets`, `triage-bot`, `operator-bot`, `ops-assistant`). Agents post through its API with the typed cards in `platform_clients::chatops`; all formatting lives in `services/chatops-bot/src/cards.rs`. Don't post to Mattermost directly.
+- Button clicks reach the bot through Mattermost (`MM_SERVICESETTINGS_ALLOWEDUNTRUSTEDINTERNALCONNECTIONS`), and each decision goes to `platform.actions`. Carrying out an approved action is the agents' job (#10, #11).
+- The **tickets** mock follows the ServiceNow Table API (`platform_clients::tickets`). It notifies the bot after every change, so ticket cards stay current. Its schema is in `services/tickets/migrations/`.
+- Grafana's dashboard is provisioned from `observability/grafana/dashboards/platform-overview.json`; edit the file, not the UI. It reads the ops DB as the read-only `grafana` role (`postgres/databases.sh`).
+- `make chatops-test` (`scripts/chatops-test.sh`) covers the workspace, the alert firehose, the Table API, ticket cards, a button click through Mattermost, ticket lookups and Grafana's datasources. Run it after changing any of these.
+
+Local endpoints (all bound to 127.0.0.1): Flink UI/REST `:8081`, SQL Gateway `:8083`, Prometheus `:9090`, Kafka `:9094` (inside Compose, `kafka:9092`), Iceberg REST catalog `:8181`, RustFS S3 API `:9000` and console `:9001`, Postgres `:5432`, collector `:8090`, cicd-sim `:8091`, fleet-exporter `:9249`, Alertmanager `:9093`, Mattermost `:8065`, chatops-bot `:8092`, tickets `:8094`, Grafana `:3000`.
 
 Cloud runtime (`scripts/aws.sh`; design doc §4.5). These create, change or delete AWS resources, so run them only when asked:
 
 - `make stack-aws` creates or updates the `current2026-demo` CloudFormation stack (`infra/cloudformation/demo.yaml`). `make secrets-aws` copies the ShadowTraffic license and any API keys in `.env` to SSM Parameter Store.
-- `make deploy-aws` pushes the Flink image to ECR, uploads the Compose bundle to S3 and starts it on the instance over SSM Run Command. `make jobs-submit-aws` submits the jobs there.
+- `make deploy-aws` pushes the Flink, services and Mattermost images to ECR, uploads the Compose bundle to S3 and starts it on the instance over SSM Run Command. `make jobs-submit-aws` submits the jobs there.
 - `scripts/aws.sh exec <command>` runs a shell command in `/opt/platform` on the instance. `make ps-aws` shows container status.
-- `make tunnel` forwards the UIs to localhost. `make teardown-aws` deletes the stack, the bucket's contents and the secrets.
+- `make tunnel` forwards the UIs to localhost: Flink, SQL Gateway, Prometheus, Mattermost, Grafana and the tickets UI, on their local ports. `make teardown-aws` deletes the stack, the bucket's contents and the secrets.
 
 Settings that differ between runtimes, such as S3 endpoint and credentials, Flink memory and slots, and database passwords, come from environment variables with defaults in `compose.yml`; see `.env.example`. Platform-wide Flink behaviour, such as the scheduler, checkpointing, restart strategy and metrics, is in `flink/conf/config.yaml`. Flink logs go to stdout as JSON, formatted by `flink/conf/log-template.json`.
 

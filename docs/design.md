@@ -204,12 +204,12 @@ ShadowTraffic can also write Iceberg directly to Glue. We may use that to fill f
   - mounts `flink/catalogs/aws/lake.yaml` (the Iceberg Glue catalog), and points checkpoints and savepoints at the bucket;
   - drops the static S3 credentials, so S3 and Glue use the instance role;
   - runs two TaskManagers and raises memory limits to the EC2 column of §11.
-- **Images**: custom images (the Rust services, Flink with plugins) are built on the M3 for arm64 and pushed to **ECR**. Public images are pulled from Docker Hub.
+- **Images**: custom images (the Rust services, Flink with plugins, Mattermost built from its arm64 release) are built on the M3 for arm64 and pushed to **ECR**. Public images are pulled from Docker Hub.
 - **Rollout**: `make deploy-aws` builds the jobs jar and pushes the images. It then uploads the Compose bundle (Compose files, configs, scripts, SQL jobs and the jar) to S3. Finally it uses **SSM Run Command** to unpack the bundle in `/opt/platform`, write `.env`, and run `docker compose pull && up -d --wait`. `make jobs-submit-aws` and `scripts/aws.sh jobs|exec` run `scripts/jobs.sh` or any command on the instance the same way, so no tunnel is needed to deploy jobs.
-- **Access**: `make tunnel` sets up SSM port forwarding for the Flink UI, SQL Gateway and Prometheus, plus Mattermost, Grafana and the tickets UI as they land. The security group has **no inbound rules**.
+- **Access**: `make tunnel` sets up SSM port forwarding for the Flink UI, SQL Gateway, Prometheus, Mattermost, Grafana and the tickets UI, each on its local port, so links on Mattermost cards (`localhost:3000`, `localhost:8094`) work in both runtimes. The security group has **no inbound rules**.
 - **Secrets** live in **SSM Parameter Store SecureStrings**. CloudFormation can't create SecureStrings, so `make secrets-aws` copies them from the laptop:
   - the ShadowTraffic license goes to `/<stack>/shadowtraffic/license.env`;
-  - the Jev and Anthropic API keys and the Mattermost bot token go to `/<stack>/env/<NAME>`, taken from the local `.env`.
+  - the Jev and Anthropic API keys, and the Mattermost and Grafana admin passwords, go to `/<stack>/env/<NAME>`, taken from the local `.env`. (The chatops-bot creates the Mattermost bot tokens itself.)
 
   At deploy time the instance role reads them into the instance's `shadowtraffic/license.env` and `.env`.
 - **CloudFormation** (`infra/cloudformation/demo.yaml`, default stack name `current2026-demo`) creates:
@@ -407,20 +407,37 @@ On the timeline:
 
 ### 9.1 Mattermost
 
-- Channels: `#platform-alerts` (raw firehose), `#platform-signals` (triage output), `#platform-incidents` (operator activity, one thread per incident).
-- Bots: `triage-bot`, `operator-bot` and `ops-assistant` (Claude). The three personas make it obvious which stage of the maturity curve is acting.
+- Mattermost Team Edition runs on the shared Postgres. Mattermost publishes container images for amd64 only, so `mattermost/Dockerfile` builds one from the official linux-arm64 release, with its checksum pinned.
+- Channels: `#platform-alerts` (raw firehose), `#platform-signals` (triage output), `#platform-incidents` (operator activity and tickets, one thread per incident).
+- Bots: `triage-bot`, `operator-bot` and `ops-assistant` (Claude). The three personas make it obvious which stage of the maturity curve is acting. Two plumbing bots, `alertmanager` (the firehose) and `tickets` (ticket cards), keep that traffic apart from the agents.
+- People log in as `oncall`, the on-call engineer and Mattermost's admin.
 - Rich posts use **message attachments** (colour bar, fields, title link) and **interactive buttons**. Mattermost needs `AllowedUntrustedInternalConnections` set to allow the chatops-bot hostname for button callbacks inside Compose.
-- **chatops-bot** (Rust) uses the Mattermost REST API plus a WebSocket for events, serves button callbacks, and runs the Claude Code bridge. The triage and operator agents post through it, so all Mattermost formatting lives in one place.
+- **chatops-bot** (Rust) uses the Mattermost REST API plus a WebSocket for events, serves button callbacks, and runs the Claude Code bridge (#11). The triage and operator agents post through it, so all Mattermost formatting lives in one place:
+  - On every start it sets up the workspace idempotently: the `oncall` user (created through open sign-up on a new server, which makes it the admin), the `platform` team, the channels and the bots. Each bot gets a fresh access token, and the bot's old tokens are revoked.
+  - `POST /api/posts` and `PUT /api/posts/{id}` take a typed card (`platform_clients::chatops::Card`: alert, signal, incident, ticket or approval) or text, optionally as a thread reply. Templates in `services/chatops-bot/src/cards.rs` turn cards into attachments.
+  - It posts every `platform.alerts` event to `#platform-alerts`.
+  - An approval card's buttons each carry a decision (`approved` or `rejected`, on an action with parameters). A click records the decision in `platform.actions`, with the clicking user as the actor, and replaces the buttons with who decided what. Carrying out an approved action belongs to the agents (#10, #11).
+  - The tickets mock tells it about every change (`POST /hooks/tickets`). A new ticket gets a card in `#platform-incidents`, inside its incident's thread when the incident card was posted through the bot (matched by `correlation_id`). Updates edit the card and add the new work note to the thread.
+  - On the WebSocket, a human post that mentions a ticket number (`INC0010001`) gets the ticket's card in reply.
+  - `POST /admin/reset-channels` archives the channels (renamed with a timestamp) and creates them afresh, for the director's reset (§10.2).
 
 ### 9.2 Tickets mock
 
 - A Rust (`axum`) service with a **ServiceNow Table API-shaped** interface: `POST/GET/PATCH /api/now/table/incident`, `sys_id`, `number` (`INC0010001…`), `state`, `priority`, `assignment_group`, `short_description`, `work_notes`. Real ServiceNow clients would therefore work against it.
+  - Values are strings, as in ServiceNow. `cmdb_ci` holds the job name and `correlation_id` the agents' incident ID.
+  - `work_notes` and `comments` are journals: setting one adds an entry, and reading returns every entry, newest first.
+  - `sysparm_query` supports AND-ed conditions (`=`, `!=`, comparisons, `LIKE`, `STARTSWITH`, `IN`, `ISEMPTY` and their negations), `active=true` and `ORDERBY`/`ORDERBYDESC`. It rejects anything else, rather than return unfiltered results.
+  - The basic-auth user name is recorded as the author of each change; passwords aren't checked.
 - A small, generic ticket web UI with Open Graph tags, so the link renders a preview card. It is not styled to look like ServiceNow.
 - Data lives in the `tickets` Postgres database.
 
 ### 9.3 Grafana
 
 A single dashboard: alerts in vs. signals out, and a per-job panel for the starring jobs (restarts, checkpoint duration and size, lag, parallelism) annotated with deployments and agent actions. On stage it sits next to Mattermost.
+
+- Anyone can view it without logging in. It is provisioned from `observability/grafana/`; edit the JSON, not the UI.
+- The counts and annotations come from the ops DB, which Grafana reads as the read-only `grafana` role; the job panels come from Prometheus.
+- The job variable uses Prometheus's label form of the name (`payments_enrichment`). Signal cards link to the dashboard for their job and time window.
 
 ## 10. Repository layout and tooling
 
@@ -451,6 +468,7 @@ shadowtraffic/
   inputs.json  fleet.json  faults/*.json
   fleet/                    # generate.py → fleet.json and the cloud/local rosters
 observability/              # Prometheus (+ alert rules), Alertmanager, Grafana, Vector configs
+mattermost/                 # Mattermost image for arm64, from the official release
 infra/cloudformation/demo.yaml
 docs/
 ```
@@ -483,7 +501,7 @@ These are estimates to check against real usage.
 | ShadowTraffic (inputs + fleet + one fault) | 2 GB | 3 GB |
 | Postgres | 0.5 GB | 1 GB |
 | Mattermost | 0.75 GB | 1 GB |
-| Prometheus + Alertmanager + Grafana | 1 GB | 1.5 GB |
+| Prometheus + Alertmanager + Grafana (0.5 GB of it) | 1 GB | 1.5 GB |
 | Vector | 0.1 GB | 0.1 GB |
 | Rust services + agents | 0.3 GB | 0.3 GB |
 | Claude Code (Node) | 0.5 GB | 0.5 GB |

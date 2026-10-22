@@ -26,13 +26,14 @@ TEMPLATE=infra/cloudformation/demo.yaml
 REMOTE_DIR=/opt/platform
 LOCAL_FLINK_IMAGE=platform/flink:2.1.2
 LOCAL_SERVICES_IMAGE=platform/services:latest
+LOCAL_MATTERMOST_IMAGE=platform/mattermost:11.11.2
 # Secrets read from the local .env, if set there, and written to the
 # instance's .env. The ShadowTraffic license is stored whole.
-ENV_SECRETS=(JEV_API_KEY ANTHROPIC_API_KEY MATTERMOST_BOT_TOKEN)
+ENV_SECRETS=(JEV_API_KEY ANTHROPIC_API_KEY MATTERMOST_ADMIN_PASSWORD GRAFANA_ADMIN_PASSWORD)
 LICENSE_FILE=shadowtraffic/license.env
-# Ports forwarded by `tunnel`. Add Grafana, Mattermost and the tickets UI as
-# they land.
-TUNNEL_PORTS=(8081 8083 9090)
+# Ports forwarded by `tunnel`: the Flink UI, SQL Gateway, Prometheus,
+# Mattermost, Grafana and the tickets UI.
+TUNNEL_PORTS=(8081 8083 9090 8065 3000 8094)
 # Files the instance needs to run the stack, the jobs and the tests.
 BUNDLE=(
   compose.yml compose.aws.yml
@@ -138,16 +139,17 @@ push_image() {
 }
 
 deploy() {
-  local bucket registry key image services_image
+  local bucket registry key image services_image mattermost_image
   bucket=$(output BucketName)
   registry=$(output Registry)
   [[ -f jobs/java/target/platform-jobs.jar ]] || die "jar not built; run 'make jobs'"
 
   log "Building and pushing images"
-  DOCKER_DEFAULT_PLATFORM=linux/arm64 docker compose build jobmanager collector
+  DOCKER_DEFAULT_PLATFORM=linux/arm64 docker compose build jobmanager collector mattermost
   aws ecr get-login-password | docker login --username AWS --password-stdin "$registry" >/dev/null
   image=$(push_image "$LOCAL_FLINK_IMAGE" "$(output FlinkRepositoryUri)")
   services_image=$(push_image "$LOCAL_SERVICES_IMAGE" "$(output ServicesRepositoryUri)")
+  mattermost_image=$(push_image "$LOCAL_MATTERMOST_IMAGE" "$(output MattermostRepositoryUri)")
 
   log "Uploading the Compose bundle"
   key=bundles/$(date -u +%Y%m%dT%H%M%SZ).tgz
@@ -170,6 +172,7 @@ aws ssm get-parameter --name /$STACK/shadowtraffic/license.env --with-decryption
   echo S3_BUCKET=$bucket
   echo FLINK_IMAGE=$image
   echo SERVICES_IMAGE=$services_image
+  echo MATTERMOST_IMAGE=$mattermost_image
   aws ssm get-parameters-by-path --path /$STACK/env/ --with-decryption \
     --query 'Parameters[].[Name, Value]' --output text |
     awk -F '\t' '{ sub(/.*\//, "", \$1); print \$1 "=" \$2 }'

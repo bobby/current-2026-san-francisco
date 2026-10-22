@@ -39,6 +39,7 @@ make jobs-submit  # build the Java jobs jar and submit all six jobs
 make jobs-test    # every job commits to Iceberg; every fault fails as designed (a few minutes)
 make telemetry-test  # job status, checkpoints, logs and alerts reach Kafka and the ops DB
 make fleet-test   # the simulated fleet looks like real jobs; the naive alerts flow (~15 min)
+make chatops-test # Mattermost cards and buttons, the tickets mock and Grafana
 make rust-test    # Rust unit tests and ops DB tests (needs a Rust toolchain)
 make down         # stop (keep data); `make clean` also deletes volumes
 ```
@@ -63,7 +64,7 @@ scripts/jobs.sh list
 scripts/jobs.sh cancel positions-aggregator
 ```
 
-Then open the Flink UI at http://localhost:8081, Prometheus at http://localhost:9090, Alertmanager at http://localhost:9093, and the RustFS console at http://localhost:9001. Copy `.env.example` to `.env` to override the defaults.
+Then open the Flink UI at http://localhost:8081, Prometheus at http://localhost:9090, Alertmanager at http://localhost:9093, and the RustFS console at http://localhost:9001. The human interfaces are Mattermost at http://localhost:8065 (log in as `oncall`, password `oncall-demo-2026`), the Grafana dashboard at http://localhost:3000 (no login needed) and the tickets UI at http://localhost:8094. Copy `.env.example` to `.env` to override the defaults.
 
 #### Running on AWS
 
@@ -72,9 +73,9 @@ You also need the AWS CLI with the `evidentsystems` profile and the [Session Man
 ```sh
 make stack-aws        # create or update the CloudFormation stack (~5 min the first time)
 make secrets-aws      # copy the ShadowTraffic license (and any API keys in .env) to SSM Parameter Store
-make deploy-aws       # push the Flink image to ECR, upload the Compose bundle and start the stack
+make deploy-aws       # push the images to ECR, upload the Compose bundle and start the stack
 make jobs-submit-aws  # submit every job on the instance
-make tunnel           # forward the Flink UI (:8081), SQL Gateway (:8083) and Prometheus (:9090)
+make tunnel           # forward the Flink UI, SQL Gateway, Prometheus, Mattermost, Grafana and tickets UI
 make teardown-aws     # delete everything: stack, bucket contents, images, secrets
 ```
 
@@ -116,7 +117,9 @@ The MCP server for Scenario 2 uses the official Rust MCP SDK ([`rmcp`](https://c
 ### ChatOps and Ticketing
 
 - **[Mattermost](https://mattermost.com/)** runs in Compose as the ChatOps UI. Agents post alerts, incident threads and status updates there. All three scenarios happen in Mattermost, including the Scenario 2 conversation with Claude Code.
-- **A ServiceNow-shaped mock ticketing service** runs in Compose. Agents open tickets and add notes as they diagnose and remediate. Ticket links render as rich previews in Mattermost.
+- **A ServiceNow-shaped mock ticketing service** runs in Compose. Agents open tickets and add notes as they diagnose and remediate. Each ticket appears as a card in Mattermost that links to its page and follows its updates.
+- **A chatops-bot** is the only Mattermost client: agents post typed cards through it, and it handles the buttons on them.
+- **A Grafana dashboard** shows alerts in against signals out, and the starring jobs annotated with deployments and actions.
 
 ## Talk Abstract
 
