@@ -27,6 +27,13 @@ pub struct Sample {
     pub value: f64,
 }
 
+/// One series of a range query's result.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RangeSeries {
+    pub labels: BTreeMap<String, String>,
+    pub points: Vec<(DateTime<Utc>, f64)>,
+}
+
 #[derive(Debug, Clone)]
 pub struct PrometheusClient {
     base_url: String,
@@ -86,6 +93,69 @@ impl PrometheusClient {
             .filter_map(|s| {
                 let value: f64 = s.value.1.parse().ok()?;
                 value.is_finite().then_some(Sample { labels: s.metric, value })
+            })
+            .collect())
+    }
+
+    /// A range query: each series' values every `step` over `[from, to]`.
+    pub async fn query_range(
+        &self,
+        promql: &str,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+        step: std::time::Duration,
+    ) -> Result<Vec<RangeSeries>> {
+        #[derive(Deserialize)]
+        struct RangeEnvelope {
+            status: String,
+            data: Option<RangeData>,
+            #[serde(rename = "errorType", default)]
+            error_type: String,
+            #[serde(default)]
+            error: String,
+        }
+        #[derive(Deserialize)]
+        struct RangeData {
+            result: Vec<RangeSample>,
+        }
+        #[derive(Deserialize)]
+        struct RangeSample {
+            metric: BTreeMap<String, String>,
+            values: Vec<(f64, String)>,
+        }
+        let seconds = |t: DateTime<Utc>| format!("{:.3}", t.timestamp_millis() as f64 / 1000.0);
+        let envelope: RangeEnvelope = self
+            .http
+            .get(format!("{}/api/v1/query_range", self.base_url))
+            .query(&[
+                ("query", promql),
+                ("start", &seconds(from)),
+                ("end", &seconds(to)),
+                ("step", &format!("{}s", step.as_secs().max(1))),
+            ])
+            .send()
+            .await?
+            .json()
+            .await?;
+        if envelope.status != "success" {
+            return Err(Error::Query { error_type: envelope.error_type, error: envelope.error });
+        }
+        Ok(envelope
+            .data
+            .map(|d| d.result)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|s| RangeSeries {
+                labels: s.metric,
+                points: s
+                    .values
+                    .into_iter()
+                    .filter_map(|(t, v)| {
+                        let v: f64 = v.parse().ok()?;
+                        let t = DateTime::from_timestamp_millis((t * 1000.0) as i64)?;
+                        v.is_finite().then_some((t, v))
+                    })
+                    .collect(),
             })
             .collect())
     }

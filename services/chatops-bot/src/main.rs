@@ -13,15 +13,21 @@
 //!   ticket's card follows.
 //! - It listens on Mattermost's WebSocket and answers posts that mention a
 //!   ticket number with its card.
+//! - A post that mentions `@ops-assistant` goes to Claude Code, in a session
+//!   per thread (`assistant`). Claude investigates through the platform's MCP
+//!   server and can propose a remediation (`POST /api/proposals`): an
+//!   approval card whose **Approve** the bot carries out (`remediation`).
 //! - `POST /admin/reset-channels` archives and re-creates the channels (the
 //!   director's reset).
 
+mod assistant;
 mod bot;
 mod cards;
 mod mattermost;
+mod remediation;
 mod setup;
 
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{collections::HashMap, net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::Context;
 use axum::{
@@ -34,7 +40,13 @@ use axum::{
 use bot::{ActionRequest, Chatops};
 use clap::Parser;
 use futures_util::StreamExt;
-use platform_clients::{chatops::PostRequest, kafka::Publisher, tickets::TicketNotification, tickets::TicketsClient};
+use platform_clients::{
+    chatops::{PostRequest, ProposalRequest},
+    cicd::CicdClient,
+    flink::FlinkClient,
+    kafka::Publisher,
+    tickets::TicketNotification,
+};
 use platform_model::{AlertEvent, topics};
 use rdkafka::{
     ClientConfig, Message,
@@ -71,6 +83,28 @@ struct Config {
     grafana_public_url: String,
     #[arg(long, env = "TICKETS_PUBLIC_URL", default_value = "http://localhost:8094")]
     tickets_public_url: String,
+    #[arg(long, env = "CICD_URL", default_value = "http://cicd-sim:8091")]
+    cicd_url: String,
+    #[arg(long, env = "FLINK_URL", default_value = "http://jobmanager:8081")]
+    flink_url: String,
+    /// Claude Code's key. Without it, `@ops-assistant` says it isn't set up.
+    #[arg(long, env = "ANTHROPIC_API_KEY", hide_env_values = true)]
+    anthropic_api_key: Option<String>,
+    #[arg(long, env = "CLAUDE_BIN", default_value = "claude")]
+    claude_bin: String,
+    #[arg(long, env = "CLAUDE_MODEL", default_value = "claude-sonnet-5-5")]
+    claude_model: String,
+    /// Claude Code's home directory, where its sessions live.
+    #[arg(long, env = "CLAUDE_HOME", default_value = "/var/lib/claude")]
+    claude_home: PathBuf,
+    #[arg(long, env = "CLAUDE_TIMEOUT", default_value = "5m", value_parser = humantime::parse_duration)]
+    claude_timeout: Duration,
+    /// The MCP server's view of the platform: the ops DB as a read-only
+    /// role, Prometheus and Kafka.
+    #[arg(long, env = "ASSISTANT_DATABASE_URL", default_value = "postgres://assistant:assistant@postgres:5432/ops")]
+    assistant_database_url: String,
+    #[arg(long, env = "PROMETHEUS_URL", default_value = "http://prometheus:9090")]
+    prometheus_url: String,
 }
 
 type AppState = State<Arc<Chatops>>;
@@ -91,19 +125,44 @@ async fn main() -> anyhow::Result<()> {
         tickets: config.tickets_public_url.trim_end_matches('/').to_string(),
         callback: config.callback_url.trim_end_matches('/').to_string(),
     };
+    let assistant = match config.anthropic_api_key.as_deref().filter(|k| !k.is_empty()) {
+        Some(_) => Some(assistant::Assistant::new(assistant::AssistantConfig {
+            claude: config.claude_bin.clone(),
+            model: config.claude_model.clone(),
+            home: config.claude_home.clone(),
+            mcp_env: HashMap::from([
+                ("OPS_DATABASE_URL".to_string(), config.assistant_database_url.clone()),
+                ("PROMETHEUS_URL".to_string(), config.prometheus_url.clone()),
+                ("FLINK_URL".to_string(), config.flink_url.clone()),
+                ("CICD_URL".to_string(), config.cicd_url.clone()),
+                ("TICKETS_URL".to_string(), config.tickets_url.clone()),
+                ("CHATOPS_URL".to_string(), format!("http://localhost:{}", config.listen_addr.port())),
+                ("KAFKA_BOOTSTRAP_SERVERS".to_string(), config.kafka_bootstrap_servers.clone()),
+            ]),
+            timeout: config.claude_timeout,
+        })),
+        None => {
+            warn!("ANTHROPIC_API_KEY isn't set; @ops-assistant is off");
+            None
+        }
+    };
     let chatops = Arc::new(Chatops::new(
         mm,
         workspace,
         admin,
         links,
         Publisher::new(&config.kafka_bootstrap_servers, "chatops-bot")?,
-        TicketsClient::new(&config.tickets_url, "chatops-bot"),
+        &config.tickets_url,
+        CicdClient::new(&config.cicd_url),
+        FlinkClient::new(&config.flink_url),
+        assistant,
     ));
 
     let app = Router::new()
         .route("/health", get(|| async { "ok" }))
         .route("/api/posts", post(create_post))
         .route("/api/posts/{post_id}", put(update_post))
+        .route("/api/proposals", post(propose))
         .route("/actions", post(action))
         .route("/hooks/tickets", post(ticket_hook))
         .route("/admin/reset-channels", post(reset_channels))
@@ -148,9 +207,25 @@ async fn update_post(
     }
 }
 
+async fn propose(State(chatops): AppState, Json(request): Json<ProposalRequest>) -> Response {
+    match chatops.propose(request).await {
+        Ok(response) => Json(response).into_response(),
+        Err(err) => error(StatusCode::BAD_GATEWAY, err),
+    }
+}
+
 async fn action(State(chatops): AppState, Json(request): Json<ActionRequest>) -> Response {
+    let (action_id, phase) = (request.context.action_id, request.context.button.phase);
     match chatops.on_action(request).await {
-        Ok(body) => Json(body).into_response(),
+        Ok((body, user)) => {
+            // A proposal's approval is carried out in the background; the
+            // click gets its answer at once.
+            if !user.is_empty() {
+                let chatops = chatops.clone();
+                tokio::spawn(async move { chatops.carry_out(action_id, phase, &user).await });
+            }
+            Json(body).into_response()
+        }
         Err(err) => {
             let body = json!({"ephemeral_text": format!("Couldn't record that: {err:#}")});
             warn!(error = format!("{err:#}"), "button click failed");

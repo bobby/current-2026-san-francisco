@@ -1,6 +1,6 @@
 [package]
 name = "chatops-bot"
-description = "The platform's Mattermost bot: card templates, interactive buttons, the alert firehose and ticket updates (docs/design.md §9.1)."
+description = "The platform's Mattermost bot: card templates, interactive buttons, the alert firehose, ticket updates and the Claude Code bridge (docs/design.md §9.1)."
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
@@ -15,12 +15,13 @@ axum.workspace = true
 chrono.workspace = true
 clap.workspace = true
 futures-util.workspace = true
+humantime.workspace = true
 rdkafka.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["process", "io-util", "sync"] }
 tokio-tungstenite.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

@@ -425,6 +425,15 @@ impl OpsDb {
         rows.into_iter().map(TryInto::try_into).collect()
     }
 
+    /// A triage signal by ID.
+    pub async fn signal(&self, signal_id: uuid::Uuid) -> Result<Option<Signal>> {
+        let row: Option<(Json<Signal>,)> = sqlx::query_as("SELECT event FROM signals WHERE signal_id = $1")
+            .bind(signal_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.map(|(Json(s),)| s))
+    }
+
     /// Triage signals in `[from, to)`, for one job or all, oldest first.
     pub async fn signals_between(&self, job_name: Option<&str>, from: Timestamp, to: Timestamp) -> Result<Vec<Signal>> {
         let rows: Vec<(Json<Signal>,)> = sqlx::query_as(

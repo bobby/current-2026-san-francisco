@@ -313,9 +313,11 @@ The same Postgres instance hosts the `mattermost`, `tickets` and (locally) `iceb
 
 ### 6.2 Claude Code (Scenario 2)
 
-- Runs headless inside the chatops-bot container (`claude -p --output-format stream-json --resume <session>`), with one session per Mattermost incident thread. It is configured with our MCP server and a system prompt describing the platform.
-- Credentials come from an Anthropic API key in Parameter Store (in a local `.env` on the laptop).
-- Read-only MCP tools are pre-approved. Mutating actions are **not** MCP tools. Claude can only *propose* a remediation, which shows up as an approval card (§8.2).
+- Runs headless inside the chatops-bot container (`claude -p --output-format stream-json`), with one session per Mattermost thread: `--session-id` on the first question, `--resume` after. Claude Code (pinned in `services/Dockerfile`) and Node are in the services image, beside the MCP server's binary. The model is `CLAUDE_MODEL` (default `claude-sonnet-5-5`).
+- It has no built-in tools (`--tools ""`) and only our MCP server (`--strict-mcp-config`), which it starts over stdio for each run, with the thread's context (its root post, channel and signal) in the server's environment. The MCP server reads the ops DB as the read-only `assistant` role.
+- The platform's system prompt (`services/chatops-bot/src/assistant-prompt.md`) describes the platform and asks for the root cause, not the latest change, with the evidence, in a short chat answer.
+- Credentials come from an Anthropic API key in Parameter Store (in a local `.env` on the laptop). Without one, `@ops-assistant` replies that it isn't set up.
+- The MCP tools are pre-approved and everything else is refused (`--permission-mode dontAsk`). All of them read, except `propose_remediation`, which changes nothing: mutating actions are **not** MCP tools. Claude can only *propose* a remediation, which shows up as an approval card (§8.2).
 
 ## 7. Failure-mode catalogue
 
@@ -400,6 +402,15 @@ How the agent works:
 
 Mutations only happen through the approval card, which is the human in the loop. Every proposal and approval is written to `platform.actions`.
 
+How it works:
+
+- **Mentions.** The chatops-bot follows Mattermost's WebSocket. A human post in `#platform-signals` or `#platform-incidents` that mentions `@ops-assistant` goes to Claude with the question, in its thread's session. A new session also gets what the thread is about: the root post's signal or incident and its job, from the props the bot puts on the cards it posts.
+- **Status lines.** Each tool call in Claude Code's `stream-json` output becomes a short italic reply ("🔎 checking deployment history for `trade-events-ingest`…", "🧪 sampling `trade-events` partition 2 from offset 4417…"), and its final result the answer. At most two runs go at once, and one per thread.
+- **Tools** (`services/mcp-server`): `get_signal` (the thread's by default, with the evidence triage saw), `get_job` (registry, status, Flink run and recent failures), `get_deployments` (versions, change summaries, author and extra arguments, without fault flags), `query_prometheus` (instant or range), `get_logs` (with exceptions, root causes and stack heads), `get_checkpoints`, `sample_topic` (from an offset in a partition, without consuming), `get_ticket`, `search_tickets` and `propose_remediation`.
+- **Proposals.** `propose_remediation` takes a redeploy (a catalogue version plus allowed arguments: `--on-deser-error=…`, `--state-backend=…`), a rollback or a rescale within the tenant's maximum, a rationale, and optionally a ticket for the team that must fix the cause. The MCP server checks it and sends it to the bot (`POST /api/proposals`), which posts the approval card in the thread as `ops-assistant` and records `proposed`.
+- **Approval.** The click is recorded as `approved` or `rejected` by `user:<name>`. On approval the bot redeploys or rolls back through cicd-sim (which records `executed`, tied by the action ID) or rescales through Flink's REST API, opens the proposed ticket (correlated with the signal's incident, so its card joins the operator's incident thread), and replies in the thread with what happened and the ticket number.
+- **Testing.** `make assistant-test` runs Scenario 2, asks in the F2 signal's thread, checks that the answer names the poison records' producer and the proposal is the DLQ redeploy, approves it through Mattermost, and checks that the job stays up, the DLQ fills, the ticket is open and a follow-up question resumes the session.
+
 ### 8.3 Scenario 3: agent-initiated (F1, F3, F4)
 
 **Operator agent** (`agents/operator`): consumes `platform.signals` with disposition `raise` and runs one explicit state machine per incident:
@@ -455,7 +466,7 @@ How the agent works:
   - On every start it sets up the workspace idempotently: the `oncall` user (created through open sign-up on a new server, which makes it the admin), the `platform` team, the channels and the bots. Each bot gets a fresh access token, and the bot's old tokens are revoked.
   - `POST /api/posts` and `PUT /api/posts/{id}` take a typed card (`platform_clients::chatops::Card`: alert, signal, incident, ticket or approval) or text, optionally as a thread reply. Templates in `services/chatops-bot/src/cards.rs` turn cards into attachments.
   - It posts every `platform.alerts` event to `#platform-alerts`.
-  - An approval card's buttons each carry a decision (`approved` or `rejected`, on an action with parameters). A click records the decision in `platform.actions`, with the clicking user as the actor, and replaces the buttons with who decided what. Carrying out an approved action belongs to the agents (#10, #11).
+  - An approval card's buttons each carry a decision (`approved` or `rejected`, on an action with parameters). A click records the decision in `platform.actions`, with the clicking user as the actor, and replaces the buttons with who decided what. Whoever proposed an action carries it out once approved: the operator agent for its escalation cards (§8.3), the bot itself for Claude's proposals (§8.2).
   - The tickets mock tells it about every change (`POST /hooks/tickets`). A new ticket gets a card in `#platform-incidents`, inside its incident's thread when the incident card was posted through the bot (matched by `correlation_id`). Updates edit the card and add the new work note to the thread.
   - On the WebSocket, a human post that mentions a ticket number (`INC0010001`) gets the ticket's card in reply.
   - `POST /admin/reset-channels` archives the channels (renamed with a timestamp) and creates them afresh, for the director's reset (§10.2).
@@ -494,7 +505,7 @@ services/
   cicd-sim/                 # versioned deploys and rollbacks (jobs/versions.yaml)
   tickets/
   chatops-bot/              # Mattermost bot + Claude Code bridge
-  mcp-server/               # rmcp
+  mcp-server/               # rmcp, over stdio: Claude Code's tools (Scenario 2)
 agents/
   triage/                   # Scenario 1
   operator/                 # Scenario 3

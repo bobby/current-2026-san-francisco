@@ -37,3 +37,5 @@ create_db iceberg "$ICEBERG_DB_PASSWORD"
 
 # Grafana reads the ops DB (docs/design.md §9.3).
 create_reader grafana "$GRAFANA_DB_PASSWORD" ops ops
+# So does the MCP server Claude uses (docs/design.md §8.2): its tools only read.
+create_reader assistant "$ASSISTANT_DB_PASSWORD" ops ops

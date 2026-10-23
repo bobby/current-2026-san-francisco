@@ -257,6 +257,41 @@ pub struct PostResponse {
     pub channel_id: String,
 }
 
+/// `POST /api/proposals`: a remediation Claude proposes (Scenario 2). The
+/// bot posts an approval card in the thread and records the proposal in
+/// `platform.actions`; on **Approve** it carries the action out and opens
+/// the ticket, on **Reject** it records the decision.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProposalRequest {
+    pub channel: Channel,
+    /// The thread the conversation is in.
+    pub root_id: String,
+    pub job_name: String,
+    pub signal_id: Option<Uuid>,
+    pub incident_id: Option<Uuid>,
+    pub action: ActionKind,
+    /// The action's parameters, e.g. `{"version": "2.18.0", "args":
+    /// ["--on-deser-error=dlq"]}`.
+    pub params: serde_json::Value,
+    pub rationale: String,
+    /// A ticket to open once the action is approved, e.g. for the upstream
+    /// team.
+    pub ticket: Option<TicketProposal>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TicketProposal {
+    pub assignment_group: String,
+    pub short_description: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProposalResponse {
+    pub action_id: Uuid,
+    pub post_id: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct ChatopsClient {
     base_url: String,
@@ -285,6 +320,10 @@ impl ChatopsClient {
     /// Replaces a post's text and card, e.g. to show an incident's new status.
     pub async fn update(&self, post_id: &str, request: &PostRequest) -> Result<PostResponse> {
         self.send(self.http.put(format!("{}/api/posts/{post_id}", self.base_url)).json(request)).await
+    }
+
+    pub async fn propose(&self, request: &ProposalRequest) -> Result<ProposalResponse> {
+        self.send(self.http.post(format!("{}/api/proposals", self.base_url)).json(request)).await
     }
 
     pub async fn card(&self, channel: Channel, root_id: Option<&str>, card: Card) -> Result<PostResponse> {
