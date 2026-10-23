@@ -15,6 +15,12 @@ CREATE TABLE IF NOT EXISTS lake.customer_360.customer_events (
   occurred_at TIMESTAMP_LTZ(6)
 );
 
+-- Each commit writes a new metadata file; keep only the last few.
+ALTER TABLE lake.customer_360.customer_events SET (
+  'write.metadata.delete-after-commit.enabled' = 'true',
+  'write.metadata.previous-versions-max' = '10'
+);
+
 CREATE TEMPORARY TABLE customer_events (
   event_id STRING,
   customer_id STRING,

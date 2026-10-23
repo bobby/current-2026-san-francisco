@@ -2,6 +2,7 @@
 //! the agents and the MCP server.
 
 pub mod chatops;
+pub mod cicd;
 pub mod flink;
 pub mod kafka;
 pub mod ops_db;

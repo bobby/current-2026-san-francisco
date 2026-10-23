@@ -45,6 +45,7 @@ final class TradeEventsIngest {
                   venue STRING,
                   executed_at TIMESTAMP_LTZ(6)
                 )""");
+        p.retainMetadata("lake.trading_data.trade_events");
 
         DataStream<Row> trades = p.parse(TOPIC, p.kafkaSource(TOPIC), TradeEventsIngest::parse, TRADE);
 

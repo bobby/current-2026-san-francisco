@@ -438,6 +438,18 @@ impl OpsDb {
         Ok(rows.into_iter().map(|(Json(s),)| s).collect())
     }
 
+    /// Actions on a job in `[from, to)`, oldest first.
+    pub async fn actions_between(&self, job_name: &str, from: Timestamp, to: Timestamp) -> Result<Vec<ActionEvent>> {
+        let rows: Vec<(Json<ActionEvent>,)> =
+            sqlx::query_as("SELECT event FROM actions WHERE job_name = $1 AND ts >= $2 AND ts < $3 ORDER BY ts")
+                .bind(job_name)
+                .bind(from)
+                .bind(to)
+                .fetch_all(&self.pool)
+                .await?;
+        Ok(rows.into_iter().map(|(Json(a),)| a).collect())
+    }
+
     /// The job's checkpoints that finished in `[from, to)`, oldest first.
     pub async fn checkpoints_between(
         &self,

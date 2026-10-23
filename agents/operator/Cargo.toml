@@ -1,0 +1,26 @@
+[package]
+name = "operator"
+description = "The operator agent (Scenario 3, docs/design.md §8.3): remediates raised signals within code guardrails, verifies the result, and escalates only when it must."
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+platform-model.workspace = true
+platform-clients.workspace = true
+anyhow.workspace = true
+axum.workspace = true
+chrono.workspace = true
+clap.workspace = true
+humantime.workspace = true
+rdkafka.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml_ng.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+typesafe-ai.workspace = true
+uuid.workspace = true

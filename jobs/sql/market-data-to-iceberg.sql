@@ -7,6 +7,12 @@
 -- fixed 5 ms per record, which sets the job's capacity at about 200 records/s
 -- per subtask. Chaining is off, so the source backs up behind the lookup and
 -- reports backpressure, as a real slow operator would.
+--
+-- The source runs at one subtask per partition (`scan.parallelism`), apart
+-- from the job's parallelism, so records are rebalanced across the lookup's
+-- subtasks. Quotes are keyed by symbol and the partitions are uneven (one
+-- carries almost half); forwarded straight from the source, the hot
+-- partition's lookup would cap the job at any parallelism.
 
 SET 'pipeline.name' = 'market-data-to-iceberg';
 SET 'parallelism.default' = '2';
@@ -28,6 +34,12 @@ CREATE TABLE IF NOT EXISTS lake.market_data.quotes (
   quoted_at TIMESTAMP_LTZ(6)
 );
 
+-- Each commit writes a new metadata file; keep only the last few.
+ALTER TABLE lake.market_data.quotes SET (
+  'write.metadata.delete-after-commit.enabled' = 'true',
+  'write.metadata.previous-versions-max' = '10'
+);
+
 CREATE TEMPORARY TABLE market_data (
   symbol STRING,
   venue STRING,
@@ -39,6 +51,7 @@ CREATE TEMPORARY TABLE market_data (
 ) WITH (
   'connector' = 'kafka',
   'topic' = 'market-data',
+  'scan.parallelism' = '3',
   'properties.bootstrap.servers' = 'kafka:9092',
   'properties.group.id' = 'market-data-to-iceberg',
   'properties.auto.offset.reset' = 'earliest',

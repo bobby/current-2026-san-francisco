@@ -589,6 +589,43 @@ services:
       prometheus:
         condition: service_healthy
 
+  # The operator agent (Scenario 3, docs/design.md §8.3): remediates raised
+  # signals within code guardrails, verifies, and escalates the rest.
+  # Without JEV_API_KEY it stays up but doesn't act.
+  operator:
+    <<: *services
+    command: [operator, run]
+    environment:
+      OPS_DATABASE_URL: postgres://ops:${OPS_DB_PASSWORD:-ops}@postgres:5432/ops
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      PROMETHEUS_URL: http://prometheus:9090
+      FLINK_URL: http://jobmanager:8081
+      CICD_URL: http://cicd-sim:8091
+      CHATOPS_URL: http://chatops-bot:8092
+      TICKETS_URL: http://tickets:8094
+      JEV_API_KEY: ${JEV_API_KEY:-}
+      JEV_BASE_URL: ${JEV_BASE_URL:-https://api.typesafe.ai}
+      OPERATOR_CONFIG: /etc/operator/operator.yaml
+    volumes:
+      - ./agents/operator/operator.yaml:/etc/operator/operator.yaml:ro
+    ports:
+      - 127.0.0.1:8095:8095
+    mem_limit: 128m
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8095/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    depends_on:
+      collector:
+        condition: service_healthy
+      chatops-bot:
+        condition: service_healthy
+      cicd-sim:
+        condition: service_healthy
+      tickets:
+        condition: service_healthy
+
   # One dashboard: alerts in vs. signals out, and the starring jobs
   # annotated with deployments and actions (docs/design.md §9.3). Anyone
   # can view it without logging in.

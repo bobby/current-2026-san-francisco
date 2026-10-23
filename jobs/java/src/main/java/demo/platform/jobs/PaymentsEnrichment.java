@@ -55,6 +55,7 @@ final class PaymentsEnrichment {
                   risk_band STRING,
                   created_at TIMESTAMP_LTZ(6)
                 )""");
+        p.retainMetadata("lake.payments_eng.payments_enriched");
 
         DataStream<Row> payments = p.parse(TOPIC, p.kafkaSource(TOPIC), PaymentsEnrichment::parse, PAYMENT);
         DataStream<Row> enriched = payments

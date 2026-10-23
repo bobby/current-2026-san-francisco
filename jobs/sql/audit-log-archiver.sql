@@ -15,6 +15,12 @@ CREATE TABLE IF NOT EXISTS lake.compliance_eng.audit_log (
   logged_at TIMESTAMP_LTZ(6)
 );
 
+-- Each commit writes a new metadata file; keep only the last few.
+ALTER TABLE lake.compliance_eng.audit_log SET (
+  'write.metadata.delete-after-commit.enabled' = 'true',
+  'write.metadata.previous-versions-max' = '10'
+);
+
 CREATE TEMPORARY TABLE audit_log (
   audit_id STRING,
   actor STRING,

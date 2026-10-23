@@ -268,4 +268,6 @@ async fn jobs_alerts_signals_and_actions(pool: PgPool) {
             .await
             .unwrap();
     assert_eq!((disposition.as_str(), phase.as_str()), ("raise", "proposed"));
+    assert_eq!(db.actions_between("payments-enrichment", t(0), t(10)).await.unwrap(), std::slice::from_ref(&action));
+    assert!(db.actions_between("payments-enrichment", t(8), t(10)).await.unwrap().is_empty());
 }

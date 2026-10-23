@@ -42,7 +42,8 @@ BUNDLE=(
   jobs/sql jobs/java/target/platform-jobs.jar jobs/versions.yaml
   observability postgres
   shadowtraffic/inputs.json shadowtraffic/fleet.json shadowtraffic/fleet/roster-cloud.json shadowtraffic/faults
-  director/timeline.yaml agents/triage/triage.yaml agents/triage/known-noise.yaml scripts docs/flink-metrics.md
+  director/timeline.yaml agents/triage/triage.yaml agents/triage/known-noise.yaml agents/operator/operator.yaml
+  scripts docs/flink-metrics.md
 )
 
 die() { echo "error: $*" >&2; exit 1; }

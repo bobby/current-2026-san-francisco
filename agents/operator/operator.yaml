@@ -1,0 +1,77 @@
+# The operator agent's tuning (docs/design.md §8.3): what Jev is told about
+# remediation, the guardrails code enforces, and the windows. Change it
+# together with a rerun of `make operator-test`.
+
+# Jev's model name or alias (GET /v1/models). The base URL and key come from
+# JEV_BASE_URL and JEV_API_KEY.
+model: jev-latest
+
+# What the platform team expects of a remediation, in every decision's state
+# as `remediation_policy`: the background an on-call engineer would bring.
+context:
+  platform: >-
+    A multi-tenant Apache Flink platform. Tenants own their jobs' code and
+    input data; the platform team owns the clusters, the deploy pipeline and
+    capacity. The operator may roll a job back, restart it or add
+    parallelism; anything else needs a person.
+  principles:
+    - Fix the cause the evidence points to, not the symptom.
+    - A rollback helps only when the latest deploy caused the problem and the previous version ran healthily.
+    - A restart doesn't help a problem in the job's code, state or input data; it comes straight back.
+    - More parallelism helps only a healthy job that can't keep up with its input.
+    - Problems that need a code or data change go to the owning team; problems beneath the jobs go to the platform team.
+
+# Guardrails: what the operator may do without a person. Jev picks a
+# remediation; code allows it only if every check here passes, and
+# escalates otherwise.
+guardrails:
+  # Jev's probability for its pick, and triage's for the failure class.
+  min_confidence: 0.5
+  min_class_confidence: 0.5
+  # Automatic actions per job (approved ones don't count).
+  budget: 1
+  budget_window: 1h
+  actions:
+    rollback_to_previous_version:
+      classes: [code_regression]
+      tiers: [tier1, tier2, tier3]
+      # The deploy being rolled back is at most this old...
+      max_deploy_age: 2h
+      # ...the job first failed at most this long after it (later failures
+      # point elsewhere, as with F2's poison records)...
+      symptoms_within: 5m
+      # ...and the previous version ran this long without failing. A
+      # production platform would ask for a day; the demo's previous
+      # versions have run only since the reset.
+      previous_healthy_for: 10m
+    restart_from_checkpoint:
+      classes: [platform_infrastructure, unknown]
+      tiers: [tier2, tier3]
+    scale_up:
+      classes: [resource_saturation]
+      tiers: [tier1, tier2, tier3]
+      # Multiply the parallelism by this, within the tenant's maximum and
+      # the cluster's free slots.
+      factor: 2
+
+# How long after acting to verify, by action: the job needs time to restart
+# and settle before "after" means anything.
+verify_after:
+  rollback_to_previous_version: 90s
+  restart_from_checkpoint: 2m
+  scale_up: 3m
+# Not recovered by then: check again every `verify_every`, and escalate once
+# this long has passed since acting.
+verify_every: 1m
+verify_deadline: 6m
+# Jev's `recovered` probability that counts as recovered.
+recovered: 0.6
+
+# `observe`: decide again after this long, at most `observe_max` times, then
+# escalate.
+observe_for: 3m
+observe_max: 2
+
+# A new signal for a job with an incident handled this recently is noted in
+# that incident's thread and ticket instead of starting a new one.
+followup: 30m

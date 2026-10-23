@@ -238,3 +238,92 @@ impl FlinkClient {
         Ok(metrics.into_iter().filter_map(|m| Some((m.id, m.value.parse().ok()?))).collect())
     }
 }
+
+/// Slot usage across the cluster, from `GET /overview`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ClusterOverview {
+    pub taskmanagers: u32,
+    #[serde(rename = "slots-total")]
+    pub slots_total: u32,
+    #[serde(rename = "slots-available")]
+    pub slots_available: u32,
+}
+
+/// One vertex (a chain of operators) of a job's graph.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Vertex {
+    pub id: String,
+    pub name: String,
+    pub parallelism: u32,
+    pub max_parallelism: u32,
+}
+
+/// A job's parallelism: the one most of its vertices run at (the highest,
+/// on a tie). A source pinned to its partition count, or an Iceberg
+/// committer that must run alone, doesn't count.
+pub fn job_parallelism(vertices: &[Vertex]) -> u32 {
+    let mut counts = std::collections::BTreeMap::new();
+    for v in vertices {
+        *counts.entry(v.parallelism).or_insert(0) += 1;
+    }
+    counts.into_iter().max_by_key(|&(p, n)| (n, p)).map_or(1, |(p, _)| p)
+}
+
+impl FlinkClient {
+    pub async fn overview(&self) -> Result<ClusterOverview> {
+        self.get("/overview").await
+    }
+
+    /// The job's vertices, with each one's current parallelism.
+    pub async fn vertices(&self, jid: &str) -> Result<Vec<Vertex>> {
+        #[derive(Deserialize)]
+        struct Job {
+            vertices: Vec<Vertex>,
+        }
+        Ok(self.get::<Job>(&format!("/jobs/{jid}")).await?.vertices)
+    }
+
+    /// Rescales a running job in place, through the adaptive scheduler's
+    /// resource requirements. The vertices running at the job's parallelism
+    /// ([`job_parallelism`]) may run at up to `parallelism`, within each
+    /// one's maximum; the rest, such as a source pinned to its partitions or
+    /// an Iceberg committer that must run alone, keep theirs. Flink restarts the job from its latest checkpoint at the
+    /// new parallelism once the slots are there.
+    pub async fn rescale(&self, jid: &str, parallelism: u32) -> Result<()> {
+        let vertices = self.vertices(jid).await?;
+        let current = job_parallelism(&vertices);
+        let requirements: serde_json::Map<String, serde_json::Value> = vertices
+            .into_iter()
+            .map(|v| {
+                let upper = if v.parallelism == current { parallelism.min(v.max_parallelism) } else { v.parallelism };
+                (v.id, serde_json::json!({"parallelism": {"lowerBound": 1, "upperBound": upper}}))
+            })
+            .collect();
+        let url = format!("{}/jobs/{jid}/resource-requirements", self.base_url);
+        let response = self.http.put(url).json(&requirements).send().await?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::Rejected(format!("{status}: {}", body.lines().next().unwrap_or_default())));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn vertex(parallelism: u32) -> Vertex {
+        Vertex { id: String::new(), name: String::new(), parallelism, max_parallelism: 128 }
+    }
+
+    #[test]
+    fn a_jobs_parallelism_is_the_one_most_vertices_run_at() {
+        // market-data-to-iceberg: source 3, lookup 2, writer 2, committer 1, sink 1.
+        assert_eq!(job_parallelism(&[vertex(3), vertex(2), vertex(2), vertex(1), vertex(1)]), 2);
+        assert_eq!(job_parallelism(&[vertex(1), vertex(1)]), 1);
+        assert_eq!(job_parallelism(&[]), 1);
+    }
+}

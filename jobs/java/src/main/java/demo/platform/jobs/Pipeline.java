@@ -3,6 +3,7 @@ package demo.platform.jobs;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.GlobalConfiguration;
+import org.apache.flink.configuration.StateBackendOptions;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -28,11 +29,20 @@ final class Pipeline {
     Pipeline(String name, JobOptions options) {
         this.name = name;
         this.options = options;
-        this.env = StreamExecutionEnvironment.getExecutionEnvironment();
+        this.env = StreamExecutionEnvironment.getExecutionEnvironment(jobConfiguration(options));
         this.tableEnv = StreamTableEnvironment.create(env, EnvironmentSettings.newInstance()
                 .withConfiguration(catalogStoreConfiguration())
                 .build());
         this.inserts = tableEnv.createStatementSet();
+    }
+
+    /** Job-level settings that override the cluster's: the state backend, if chosen. */
+    private static Configuration jobConfiguration(JobOptions options) {
+        Configuration config = new Configuration();
+        if (options.stateBackend() != null) {
+            config.set(StateBackendOptions.STATE_BACKEND, options.stateBackend());
+        }
+        return config;
     }
 
     /**
@@ -54,6 +64,17 @@ final class Pipeline {
     /** Runs DDL (e.g. creating the job's Iceberg database and table) at submission time. */
     void sql(String statement) {
         tableEnv.executeSql(statement);
+    }
+
+    /**
+     * Bounds an Iceberg table's metadata. Each commit (one per checkpoint)
+     * writes a new metadata file, and Iceberg keeps every one unless told to
+     * delete old versions. Applied on every deploy, so existing tables get it
+     * too.
+     */
+    void retainMetadata(String table) {
+        sql("ALTER TABLE " + table + " SET ('write.metadata.delete-after-commit.enabled' = 'true', "
+                + "'write.metadata.previous-versions-max' = '10')");
     }
 
     /**
