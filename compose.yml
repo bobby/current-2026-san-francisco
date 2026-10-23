@@ -333,6 +333,7 @@ services:
       MATTERMOST_DB_PASSWORD: ${MATTERMOST_DB_PASSWORD:-mattermost}
       ICEBERG_DB_PASSWORD: ${ICEBERG_DB_PASSWORD:-iceberg}
       GRAFANA_DB_PASSWORD: ${GRAFANA_DB_PASSWORD:-grafana}
+      ASSISTANT_DB_PASSWORD: ${ASSISTANT_DB_PASSWORD:-assistant}
     volumes:
       - ./postgres/databases.sh:/databases.sh:ro
     depends_on:
@@ -532,7 +533,10 @@ services:
 
   # The platform's Mattermost bot (docs/design.md §9.1): card templates and
   # buttons for the agents, the alert firehose, and ticket cards. Healthy
-  # once the Mattermost workspace is set up.
+  # once the Mattermost workspace is set up. It also runs Claude Code for
+  # `@ops-assistant` (Scenario 2, §8.2), which needs ANTHROPIC_API_KEY;
+  # Claude reads the platform through the MCP server, which reads the ops DB
+  # as the read-only `assistant` role.
   chatops-bot:
     <<: *services
     command: [chatops-bot]
@@ -540,9 +544,16 @@ services:
       MATTERMOST_ADMIN_PASSWORD: ${MATTERMOST_ADMIN_PASSWORD:-oncall-demo-2026}
       GRAFANA_PUBLIC_URL: ${GRAFANA_PUBLIC_URL:-http://localhost:3000}
       TICKETS_PUBLIC_URL: ${TICKETS_PUBLIC_URL:-http://localhost:8094}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CLAUDE_MODEL: ${CLAUDE_MODEL:-claude-sonnet-5-5}
+      ASSISTANT_DATABASE_URL: postgres://assistant:${ASSISTANT_DB_PASSWORD:-assistant}@postgres:5432/ops
+    # Claude Code's sessions, one per thread; a reset forgets them anyway.
+    tmpfs:
+      - /var/lib/claude:uid=65534,gid=65534
     ports:
       - 127.0.0.1:8092:8092
-    mem_limit: 128m
+    # Mostly Claude Code (Node): up to two runs at once.
+    mem_limit: 1g
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8092/health"]
       interval: 5s

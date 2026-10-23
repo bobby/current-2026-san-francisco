@@ -247,6 +247,8 @@ async fn jobs_alerts_signals_and_actions(pool: PgPool) {
         std::slice::from_ref(&signal)
     );
     assert!(db.signals_between(None, t(7), t(10)).await.unwrap().is_empty());
+    assert_eq!(db.signal(signal.signal_id).await.unwrap().as_ref(), Some(&signal));
+    assert!(db.signal(uuid::Uuid::new_v4()).await.unwrap().is_none());
     let action = ActionEvent {
         event_id: event_id(&["action", "1", "proposed"]),
         ts: t(7),

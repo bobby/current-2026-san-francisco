@@ -64,7 +64,7 @@ Human interfaces (design doc §9):
 
 - Mattermost is built for arm64 from the official release tarball (`mattermost/Dockerfile`); Mattermost publishes amd64 images only. Configuration is `MM_*` variables in `compose.yml`.
 - The **chatops-bot** is the only Mattermost client. On every start it sets up, idempotently, the `oncall` admin (people log in as it), the `platform` team, the three channels and five bot accounts (`alertmanager`, `tickets`, `triage-bot`, `operator-bot`, `ops-assistant`). Agents post through its API with the typed cards in `platform_clients::chatops`; all formatting lives in `services/chatops-bot/src/cards.rs`. Don't post to Mattermost directly.
-- Button clicks reach the bot through Mattermost (`MM_SERVICESETTINGS_ALLOWEDUNTRUSTEDINTERNALCONNECTIONS`), and each decision goes to `platform.actions`. Carrying out an approved action is the agents' job: the operator agent carries out decisions on its own escalation cards.
+- Button clicks reach the bot through Mattermost (`MM_SERVICESETTINGS_ALLOWEDUNTRUSTEDINTERNALCONNECTIONS`), and each decision goes to `platform.actions`. Whoever proposed an action carries it out once approved: the operator agent for its escalation cards, the bot itself for Claude's proposals.
 - The **tickets** mock follows the ServiceNow Table API (`platform_clients::tickets`). It notifies the bot after every change, so ticket cards stay current. Its schema is in `services/tickets/migrations/`.
 - Grafana's dashboard is provisioned from `observability/grafana/dashboards/platform-overview.json`; edit the file, not the UI. It reads the ops DB as the read-only `grafana` role (`postgres/databases.sh`).
 - `make chatops-test` (`scripts/chatops-test.sh`) covers the workspace, the alert firehose, the Table API, ticket cards, a button click through Mattermost, ticket lookups and Grafana's datasources. Run it after changing any of these.
@@ -77,6 +77,14 @@ The triage agent (Scenario 1; design doc §6.1, §8.1):
 - Tune offline with `triage replay --from <ts> --to <ts> [--job <name>] [--evidence]` (`cargo run -p triage -- replay …`, with `JEV_API_KEY` exported from `.env`). It re-judges a past window's alerts from the ops DB and Prometheus and changes nothing. `--out <file>` writes every signal, with its answers, as JSON Lines, to compare variants against the same run.
 - It needs `JEV_API_KEY` in `.env`. Without it the service stays up but doesn't triage. `JEV_BASE_URL` switches to an OpenJev/SemIf server.
 - `make triage-test` (`scripts/triage-test.sh`, about 35 minutes) resets, runs the whole timeline and checks that F1–F4 and the fleet's genuine problems are raised, that the noise is suppressed or attached, and that every raised signal has a card. Rerun it after changing the questions, the evidence, the policy or the timeline.
+
+The ops assistant (Scenario 2; design doc §6.2, §8.2):
+
+- A human post mentioning `@ops-assistant` in `#platform-signals` or `#platform-incidents` runs headless Claude Code inside the chatops-bot container (`services/chatops-bot/src/assistant.rs`), one session per thread. Tool calls stream into the thread as status lines; the result is the answer. The system prompt is `services/chatops-bot/src/assistant-prompt.md`.
+- Claude has no built-in tools, only the platform's MCP server (`services/mcp-server`, `rmcp` over stdio), which Claude Code starts per run with the thread's context in its environment. Every tool reads (the ops DB as the read-only `assistant` role) except `propose_remediation`, which only asks the bot to post an approval card (`POST /api/proposals`, `services/chatops-bot/src/remediation.rs`). Don't add mutating MCP tools: changes go through a person's Approve, which the bot carries out through cicd-sim or Flink and audits in `platform.actions`.
+- Leave fault flags (`--fault=…`) out of what the tools return, as triage does; they'd give the answer away.
+- Claude Code is pinned in `services/Dockerfile` (`CLAUDE_CODE_VERSION`) and installed with Node in the services image. It needs `ANTHROPIC_API_KEY` in `.env`; `CLAUDE_MODEL` picks the model. Without the key, `@ops-assistant` replies that it isn't set up.
+- `make assistant-test` (`scripts/assistant-test.sh`, about 25 minutes) runs Scenario 2, asks in the F2 signal's thread, approves the proposal through Mattermost and checks the job recovers. Rerun it after changing the prompt, the tools or the bridge.
 
 The operator agent (Scenario 3; design doc §8.3):
 

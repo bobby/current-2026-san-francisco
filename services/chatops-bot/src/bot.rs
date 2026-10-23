@@ -6,7 +6,9 @@ use std::collections::{HashMap, HashSet};
 use anyhow::Context;
 use chrono::Utc;
 use platform_clients::{
-    chatops::{Bot, Card, Channel, PostRequest, PostResponse},
+    chatops::{Bot, Card, Channel, PostRequest, PostResponse, ProposalRequest},
+    cicd::CicdClient,
+    flink::FlinkClient,
     kafka::Publisher,
     tickets::{TicketNotification, TicketsClient},
 };
@@ -18,6 +20,7 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::{
+    assistant::{self, Assistant},
     cards::{self, ButtonContext, Links, Rendered},
     mattermost::{Mattermost, Post},
     setup::{self, Admin, Workspace},
@@ -34,9 +37,17 @@ pub struct Chatops {
     pub mm: Mattermost,
     pub workspace: RwLock<Workspace>,
     admin: Admin,
-    links: Links,
-    publisher: Publisher,
+    pub(crate) links: Links,
+    pub(crate) publisher: Publisher,
     tickets: TicketsClient,
+    /// Tickets opened for approved proposals, as the assistant.
+    pub(crate) assistant_tickets: TicketsClient,
+    pub(crate) cicd: CicdClient,
+    pub(crate) flink: FlinkClient,
+    /// The Claude Code bridge, if an Anthropic API key is set.
+    assistant: Option<Assistant>,
+    /// Claude's proposals awaiting a decision, by action ID.
+    pub(crate) proposals: Mutex<HashMap<Uuid, ProposalRequest>>,
     /// Ticket `sys_id` → its card.
     ticket_posts: Mutex<HashMap<String, TicketPost>>,
     /// Incident ID → the post that roots its thread, so the incident's
@@ -57,13 +68,17 @@ pub struct ActionRequest {
 }
 
 impl Chatops {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         mm: Mattermost,
         workspace: Workspace,
         admin: Admin,
         links: Links,
         publisher: Publisher,
-        tickets: TicketsClient,
+        tickets_url: &str,
+        cicd: CicdClient,
+        flink: FlinkClient,
+        assistant: Option<Assistant>,
     ) -> Self {
         Self {
             mm,
@@ -71,7 +86,12 @@ impl Chatops {
             admin,
             links,
             publisher,
-            tickets,
+            tickets: TicketsClient::new(tickets_url, "chatops-bot"),
+            assistant_tickets: TicketsClient::new(tickets_url, crate::remediation::ASSISTANT),
+            cicd,
+            flink,
+            assistant,
+            proposals: Default::default(),
             ticket_posts: Default::default(),
             incident_threads: Default::default(),
             decided: Default::default(),
@@ -93,8 +113,19 @@ impl Chatops {
         Ok((bot, Rendered { message, ..rendered }))
     }
 
-    fn props(rendered: &Rendered) -> Value {
-        if rendered.attachment.is_null() { json!({}) } else { rendered.props() }
+    /// The post's props: the card's attachment and, for a signal card, what
+    /// the assistant needs to know about the thread it roots.
+    fn props(rendered: &Rendered, card: Option<&Card>) -> Value {
+        let mut props = if rendered.attachment.is_null() { json!({}) } else { rendered.props() };
+        if let Some(Card::Signal(s)) = card {
+            props["signal_id"] = json!(s.signal.signal_id);
+            props["job_name"] = json!(s.signal.job_name);
+        }
+        if let Some(Card::Incident(i)) = card {
+            props["incident_id"] = json!(i.incident_id);
+            props["job_name"] = json!(i.job_name);
+        }
+        props
     }
 
     pub async fn post(&self, request: &PostRequest) -> anyhow::Result<PostResponse> {
@@ -107,7 +138,7 @@ impl Chatops {
             channel_id: channel_id.clone(),
             root_id: request.root_id.clone().unwrap_or_default(),
             message: rendered.message.clone(),
-            props: Self::props(&rendered),
+            props: Self::props(&rendered, request.card.as_ref()),
             ..Default::default()
         };
         let created = self.mm.create_post(&token, &post).await?;
@@ -121,7 +152,10 @@ impl Chatops {
     pub async fn update(&self, post_id: &str, request: &PostRequest) -> anyhow::Result<PostResponse> {
         let (bot, rendered) = self.content(request)?;
         let token = self.workspace.read().await.bot_token(bot).to_string();
-        let post = self.mm.patch_post(&token, post_id, &rendered.message, &Self::props(&rendered)).await?;
+        let post = self
+            .mm
+            .patch_post(&token, post_id, &rendered.message, &Self::props(&rendered, request.card.as_ref()))
+            .await?;
         Ok(PostResponse { post_id: post.id, channel_id: post.channel_id })
     }
 
@@ -189,10 +223,10 @@ impl Chatops {
 
     /// Records a button decision in `platform.actions` and replaces the
     /// buttons with who decided what. Returns Mattermost's response body.
-    pub async fn on_action(&self, request: ActionRequest) -> anyhow::Result<Value> {
+    pub async fn on_action(&self, request: ActionRequest) -> anyhow::Result<(Value, String)> {
         let ctx = &request.context;
         if !self.decided.lock().await.insert(ctx.action_id) {
-            return Ok(json!({"ephemeral_text": "Someone already decided on this."}));
+            return Ok((json!({"ephemeral_text": "Someone already decided on this."}), String::new()));
         }
         let admin_token = self.workspace.read().await.admin_token.clone();
         let user = if request.user_name.is_empty() {
@@ -223,16 +257,23 @@ impl Chatops {
 
         let post = self.mm.get_post(&admin_token, &request.post_id).await?;
         let attachment = post.props.get("attachments").and_then(|a| a.get(0)).cloned().unwrap_or_else(|| json!({}));
-        Ok(json!({
-            "update": {"message": post.message, "props": {"attachments": [cards::decided(attachment, &ctx.button, &user)]}},
+        let mut props = post.props.clone();
+        props["attachments"] = json!([cards::decided(attachment, &ctx.button, &user)]);
+        let body = json!({
+            "update": {"message": post.message, "props": props},
             "ephemeral_text": format!("Recorded: {} {}", ctx.button.label.to_lowercase(), cards::action_label(ctx.button.action).to_lowercase()),
-        }))
+        });
+        Ok((body, user))
     }
 
     /// Answers a human's post that mentions ticket numbers with each ticket's
     /// card, in the post's thread.
     pub async fn on_posted(&self, post: Post) {
         if post.user_id.is_empty() || self.workspace.read().await.is_bot(&post.user_id) {
+            return;
+        }
+        if mentions_assistant(&post.message) {
+            self.ask_assistant(&post).await;
             return;
         }
         let numbers = ticket_numbers(&post.message);
@@ -264,6 +305,97 @@ impl Chatops {
         }
     }
 
+    /// Hands a post that mentions `@ops-assistant` to Claude, in its
+    /// thread's session, and streams what happens back into the thread.
+    async fn ask_assistant(&self, post: &Post) {
+        let root_id = if post.root_id.is_empty() { post.id.clone() } else { post.root_id.clone() };
+        let (token, channel) = {
+            let ws = self.workspace.read().await;
+            let channel = Channel::ALL.into_iter().find(|c| ws.channel_id(*c) == post.channel_id);
+            (ws.bot_token(Bot::OpsAssistant).to_string(), channel)
+        };
+        let say = |text: String| {
+            let reply = Post {
+                channel_id: post.channel_id.clone(),
+                root_id: root_id.clone(),
+                message: text,
+                ..Default::default()
+            };
+            let token = token.clone();
+            async move {
+                if let Err(err) = self.mm.create_post(&token, &reply).await {
+                    warn!(%err, "replying as the assistant");
+                }
+            }
+        };
+        let Some(assistant) = &self.assistant else {
+            say("I'm not set up here: the chatops-bot has no `ANTHROPIC_API_KEY`.".into()).await;
+            return;
+        };
+        let Some(channel) = channel.filter(|c| *c != Channel::PlatformAlerts) else {
+            say("Ask me in a thread in #platform-signals or #platform-incidents.".into()).await;
+            return;
+        };
+        let context = match self.thread_context(&root_id, channel).await {
+            Ok(context) => context,
+            Err(err) => {
+                warn!(error = format!("{err:#}"), "reading the thread's context");
+                assistant::Context {
+                    root_id: root_id.clone(),
+                    channel: channel.name(),
+                    signal_id: None,
+                    about: format!("You're in a thread in #{}.", channel.name()),
+                }
+            }
+        };
+        let question = strip_mention(&post.message);
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let run = assistant.ask(&context, &question, tx);
+        let relay = async {
+            while let Some(event) = rx.recv().await {
+                say(match event {
+                    assistant::Event::Status(line) => format!("_{line}_"),
+                    assistant::Event::Answer(text) => text,
+                    assistant::Event::Failed(why) => format!("⚠️ {why}"),
+                })
+                .await;
+            }
+        };
+        let (result, ()) = tokio::join!(run, relay);
+        if let Err(err) = result {
+            warn!(error = format!("{err:#}"), "asking Claude");
+            say(format!("⚠️ I couldn't run: {err:#}")).await;
+        }
+    }
+
+    /// What the thread is about, from the post that roots it.
+    async fn thread_context(&self, root_id: &str, channel: Channel) -> anyhow::Result<assistant::Context> {
+        let token = self.workspace.read().await.admin_token.clone();
+        let root = self.mm.get_post(&token, root_id).await?;
+        let signal_id = root.props["signal_id"].as_str().and_then(|s| s.parse().ok());
+        let attachment = &root.props["attachments"][0];
+        let title = attachment["title"].as_str().unwrap_or_default();
+        let text = attachment["text"].as_str().unwrap_or(&root.message);
+        let about = match (signal_id, root.props["job_name"].as_str()) {
+            (Some(id), Some(job)) => format!(
+                "You're in the thread under triage signal `{id}` for job `{job}` in #{}: \"{title}\" — {text}",
+                channel.name()
+            ),
+            (None, Some(job)) => {
+                format!(
+                    "You're in the thread for an incident on job `{job}` in #{}: \"{title}\" — {text}",
+                    channel.name()
+                )
+            }
+            _ => format!(
+                "You're in a thread in #{} that starts: {}",
+                channel.name(),
+                if text.is_empty() { title } else { text }
+            ),
+        };
+        Ok(assistant::Context { root_id: root_id.to_string(), channel: channel.name(), signal_id, about })
+    }
+
     /// Archives and re-creates the channels, and forgets the old threads.
     pub async fn reset(&self) -> anyhow::Result<()> {
         let mut ws = self.workspace.write().await;
@@ -271,6 +403,10 @@ impl Chatops {
         self.ticket_posts.lock().await.clear();
         self.incident_threads.lock().await.clear();
         self.decided.lock().await.clear();
+        self.proposals.lock().await.clear();
+        if let Some(assistant) = &self.assistant {
+            assistant.forget().await;
+        }
         Ok(())
     }
 
@@ -290,6 +426,21 @@ fn phase_name(phase: ActionPhase) -> &'static str {
         ActionPhase::Executed => "executed",
         ActionPhase::Failed => "failed",
         ActionPhase::Verified => "verified",
+    }
+}
+
+/// Whether a message mentions the assistant's bot account.
+pub fn mentions_assistant(message: &str) -> bool {
+    message.to_ascii_lowercase().contains(&format!("@{}", Bot::OpsAssistant.username()))
+}
+
+/// The message without the mention, as the question for Claude.
+fn strip_mention(message: &str) -> String {
+    let mention = format!("@{}", Bot::OpsAssistant.username());
+    let lower = message.to_ascii_lowercase();
+    match lower.find(&mention) {
+        Some(at) => format!("{}{}", &message[..at], &message[at + mention.len()..]).trim().to_string(),
+        None => message.trim().to_string(),
     }
 }
 
@@ -317,6 +468,14 @@ pub fn ticket_numbers(message: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mentions_of_the_assistant() {
+        assert!(mentions_assistant("@ops-assistant what's going on here?"));
+        assert!(mentions_assistant("hey @Ops-Assistant, was it the deploy?"));
+        assert!(!mentions_assistant("ops-assistant without the at"));
+        assert_eq!(strip_mention("@ops-assistant what's going on here?"), "what's going on here?");
+    }
 
     #[test]
     fn finds_ticket_numbers() {

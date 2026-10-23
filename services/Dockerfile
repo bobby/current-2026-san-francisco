@@ -16,8 +16,14 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
  && find target/release -maxdepth 1 -type f -perm -u+x -exec cp {} /out/ \;
 
 FROM debian:trixie-slim
+# Node and Claude Code, for the chatops-bot's Claude bridge (docs/design.md
+# §6.2). Claude Code starts the MCP server (mcp-server, below) over stdio.
+ARG CLAUDE_CODE_VERSION=2.1.293
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl \
+ && apt-get install -y --no-install-recommends ca-certificates curl nodejs npm \
+ && npm install -g --omit=dev "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+ && npm cache clean --force \
+ && apt-get purge -y npm && apt-get autoremove -y \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/ /usr/local/bin/
 USER nobody
