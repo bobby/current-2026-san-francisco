@@ -1,10 +1,10 @@
 //! The director (docs/design.md §10.2): makes the demo repeatable.
 //!
-//! - `reset`: stop the fault injectors and the triage agent, cancel every job
-//!   and skip its consumer group (and the agent's) to the latest offsets,
-//!   empty the ops history and the tickets, forget the Flink metrics,
-//!   re-create the Mattermost channels, restart the seeded ShadowTraffic
-//!   runs, redeploy the baselines, and start the agent again.
+//! - `reset`: stop the fault injectors and the agents, cancel every job and
+//!   skip its consumer group (and the agents') to the latest offsets, empty
+//!   the ops history and the tickets, forget the Flink metrics, re-create the
+//!   Mattermost channels, restart the seeded ShadowTraffic runs, redeploy the
+//!   baselines, and start the agents again.
 //! - `run [--scenario 1|2|3|all]`: execute the timeline
 //!   (`director/timeline.yaml`): deploys and fault injections at fixed
 //!   offsets.
@@ -92,9 +92,9 @@ async fn main() -> anyhow::Result<()> {
 async fn reset(platform: &Platform, timeline: &Timeline) -> anyhow::Result<()> {
     println!("Resetting the platform (seed {})", timeline.seed);
 
-    step("stopping the fault injectors, the generators, the fleet relay and the triage agent");
+    step("stopping the fault injectors, the generators, the fleet relay and the agents");
     platform.stop_faults().await?;
-    platform.compose(&[], &["stop", "st-inputs", "st-fleet", "fleet-exporter", "triage"]).await?;
+    platform.compose(&[], &["stop", "st-inputs", "st-fleet", "fleet-exporter", "triage", "operator"]).await?;
 
     let cancelled = platform.cancel_all_jobs().await?;
     step(&format!("cancelled {cancelled} Flink jobs"));
@@ -102,9 +102,9 @@ async fn reset(platform: &Platform, timeline: &Timeline) -> anyhow::Result<()> {
     // nothing from before the reset lands after it.
     tokio::time::sleep(Duration::from_secs(20)).await;
 
-    // The jobs' groups are named after them; the triage agent's is `triage`.
+    // The jobs' groups are named after them; the agents' after the agents.
     let mut groups = platform.catalogue_jobs().await?;
-    groups.push("triage".to_string());
+    groups.extend(["triage".to_string(), "operator".to_string()]);
     for group in &groups {
         if let Err(err) = platform.skip_to_latest(group).await {
             tracing::warn!(error = format!("{err:#}"), group, "skipping the consumer group to latest");
@@ -127,8 +127,8 @@ async fn reset(platform: &Platform, timeline: &Timeline) -> anyhow::Result<()> {
     platform.baseline().await?;
     step("deployed every job's baseline version");
 
-    platform.compose(&[], &["up", "-d", "--wait", "triage"]).await?;
-    step("started the triage agent");
+    platform.compose(&[], &["up", "-d", "--wait", "triage", "operator"]).await?;
+    step("started the triage and operator agents");
 
     let mut state = State::load(&platform.dir);
     state.reset_at = Some(Utc::now());

@@ -30,10 +30,10 @@ Versioned deploys go through **cicd-sim** (design doc §4.3; `jobs/versions.yaml
 
 How the jobs are built:
 
-- The Java jobs are one jar with `--job=<name>`, fault flags (`--fault=npe-on-null-field|state-leak`) and `--on-deser-error=fail|dlq`.
+- The Java jobs are one jar with `--job=<name>`, fault flags (`--fault=npe-on-null-field|state-leak`), `--on-deser-error=fail|dlq` and `--state-backend=hashmap|rocksdb` (F4's temporary relief).
 - They reach Kafka and Iceberg **only through the Table API**, using the connectors on the cluster classpath (`flink/Dockerfile`). `flink-sql-connector-kafka` relocates Kafka's client classes, so don't add Kafka or Iceberg dependencies to the jar.
 - SQL jobs are `jobs/sql/<name>.sql`, submitted through the SQL Gateway.
-- Every job uses the `lake` Iceberg catalog, defined per runtime in `flink/catalogs/<runtime>/lake.yaml` and loaded through Flink's file catalog store.
+- Every job uses the `lake` Iceberg catalog, defined per runtime in `flink/catalogs/<runtime>/lake.yaml` and loaded through Flink's file catalog store. Each job sets its table to keep only its last 10 metadata files; a new table needs the same (`Pipeline.retainMetadata`, or `ALTER TABLE … SET` in SQL), or every checkpoint's commit leaves a metadata file behind.
 - `docs/flink-metrics.md` lists the real Flink metric names and labels that the simulated fleet must match.
 
 Telemetry plane and Rust code (design doc §5, §10):
@@ -54,7 +54,7 @@ The simulated fleet and alerting (design doc §4.4, §5.2, §5.3):
 The director and fault injection (design doc §4.4, §10.2):
 
 - `make reset` (`scripts/director.sh reset`) returns the platform to its starting state; `make run SCENARIO=1|2|3|all` runs the timeline in `director/timeline.yaml`; `make status` shows progress and the incidents so far. On AWS, `scripts/aws.sh director <command>`.
-- `reset` is destructive: it cancels every job, empties the ops history and the tickets, deletes Prometheus's Flink series and archives the Mattermost channels. It also restarts the triage agent, which forgets its open incidents.
+- `reset` is destructive: it cancels every job, empties the ops history and the tickets, deletes Prometheus's Flink series and archives the Mattermost channels. It also restarts the triage and operator agents, which forget their open incidents.
 - A run leaves its faults behind: F2's poison records stay ahead of `trade-events-ingest`'s committed offsets, so a redeploy fails again. `make reset` before `make jobs-test` or other tests.
 - The timeline's offsets and seed are the demo. Change them deliberately, and rerun `make director-test`, which checks that two runs with the same seed produce the same incidents (about an hour for `all`).
 - Fault injectors are Compose services in the `faults` profile (`st-fault-f2`, `-f3`, `-f5`), each running `shadowtraffic/faults/<fault>.json`. `scripts/director.sh inject <fault>` starts one by hand.
@@ -64,7 +64,7 @@ Human interfaces (design doc §9):
 
 - Mattermost is built for arm64 from the official release tarball (`mattermost/Dockerfile`); Mattermost publishes amd64 images only. Configuration is `MM_*` variables in `compose.yml`.
 - The **chatops-bot** is the only Mattermost client. On every start it sets up, idempotently, the `oncall` admin (people log in as it), the `platform` team, the three channels and five bot accounts (`alertmanager`, `tickets`, `triage-bot`, `operator-bot`, `ops-assistant`). Agents post through its API with the typed cards in `platform_clients::chatops`; all formatting lives in `services/chatops-bot/src/cards.rs`. Don't post to Mattermost directly.
-- Button clicks reach the bot through Mattermost (`MM_SERVICESETTINGS_ALLOWEDUNTRUSTEDINTERNALCONNECTIONS`), and each decision goes to `platform.actions`. Carrying out an approved action is the agents' job (#10, #11).
+- Button clicks reach the bot through Mattermost (`MM_SERVICESETTINGS_ALLOWEDUNTRUSTEDINTERNALCONNECTIONS`), and each decision goes to `platform.actions`. Carrying out an approved action is the agents' job: the operator agent carries out decisions on its own escalation cards.
 - The **tickets** mock follows the ServiceNow Table API (`platform_clients::tickets`). It notifies the bot after every change, so ticket cards stay current. Its schema is in `services/tickets/migrations/`.
 - Grafana's dashboard is provisioned from `observability/grafana/dashboards/platform-overview.json`; edit the file, not the UI. It reads the ops DB as the read-only `grafana` role (`postgres/databases.sh`).
 - `make chatops-test` (`scripts/chatops-test.sh`) covers the workspace, the alert firehose, the Table API, ticket cards, a button click through Mattermost, ticket lookups and Grafana's datasources. Run it after changing any of these.
@@ -78,7 +78,16 @@ The triage agent (Scenario 1; design doc §6.1, §8.1):
 - It needs `JEV_API_KEY` in `.env`. Without it the service stays up but doesn't triage. `JEV_BASE_URL` switches to an OpenJev/SemIf server.
 - `make triage-test` (`scripts/triage-test.sh`, about 35 minutes) resets, runs the whole timeline and checks that F1–F4 and the fleet's genuine problems are raised, that the noise is suppressed or attached, and that every raised signal has a card. Rerun it after changing the questions, the evidence, the policy or the timeline.
 
-Local endpoints (all bound to 127.0.0.1): Flink UI/REST `:8081`, SQL Gateway `:8083`, Prometheus `:9090`, Kafka `:9094` (inside Compose, `kafka:9092`), Iceberg REST catalog `:8181`, RustFS S3 API `:9000` and console `:9001`, Postgres `:5432`, collector `:8090`, cicd-sim `:8091`, fleet-exporter `:9249`, Alertmanager `:9093`, Mattermost `:8065`, chatops-bot `:8092`, triage `:8093` (`/stats`), tickets `:8094`, Grafana `:3000`.
+The operator agent (Scenario 3; design doc §8.3):
+
+- `agents/operator` consumes `platform.signals` and opens an incident for each raised signal: a card in `#platform-incidents` and a ticket. Each incident runs an explicit state machine in `incident.rs`: Gather (`facts.rs`), Decide (Jev's `remediation` choice, `questions.rs`), Guardrails (`guardrails.rs`), Act (cicd-sim, or the Flink REST API for a rescale), Verify (Jev's `recovered` noul over before/after health), then Close or Escalate.
+- Jev only picks; code decides. The guardrail table (allowed failure classes and tiers per action, deploy age, how soon the failures followed the deploy, the previous version's healthy time, parallelism limits, confidence thresholds, a per-job budget) is in `agents/operator/operator.yaml`, with unit tests for F1–F4 in `guardrails.rs`. Anything a guardrail stops is escalated.
+- It only acts on jobs in cicd-sim's catalogue; the simulated fleet's problems are escalated. Every step is a ticket work note (the chatops-bot echoes it into the incident's thread) and an entry in `platform.actions`.
+- Escalation cards have buttons; the agent consumes the decisions from `platform.actions` and carries them out (F4's temporary restart with `--state-backend=rocksdb`).
+- `operator decide --from <ts> --to <ts> [--job <name>] [--evidence]` (`cargo run -p operator -- decide …`, with `JEV_API_KEY` exported from `.env`) re-decides a past window's raised signals and prints Jev's pick and the guardrails' verdict, without acting.
+- `make operator-test` (`scripts/operator-test.sh`, about 40 minutes) resets, runs the whole timeline and checks that F1 is rolled back and its ticket resolved, F3 is rescaled and its lag drains, and F4 is escalated, then clicks F4's temporary restart through Mattermost. Rerun it after changing the guardrails, the questions or the timeline.
+
+Local endpoints (all bound to 127.0.0.1): Flink UI/REST `:8081`, SQL Gateway `:8083`, Prometheus `:9090`, Kafka `:9094` (inside Compose, `kafka:9092`), Iceberg REST catalog `:8181`, RustFS S3 API `:9000` and console `:9001`, Postgres `:5432`, collector `:8090`, cicd-sim `:8091`, fleet-exporter `:9249`, Alertmanager `:9093`, Mattermost `:8065`, chatops-bot `:8092`, triage `:8093` (`/stats`), tickets `:8094`, operator `:8095` (`/stats`, `/incidents`), Grafana `:3000`.
 
 Cloud runtime (`scripts/aws.sh`; design doc §4.5). These create, change or delete AWS resources, so run them only when asked:
 

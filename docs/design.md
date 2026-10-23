@@ -145,11 +145,11 @@ A small set of jobs. Each one owns at most one starring failure mode (§7). Name
 | `customer-events-to-iceberg` | Flink SQL | customer-360 | F5 schema drift (stretch goal) |
 | `audit-log-archiver` | Flink SQL | compliance-eng | Healthy control job, deployed often |
 
-All Java jobs come from **one jar** with a `--job=<name>` entry point and **fault flags** (`--fault=npe-on-null-field`, `--fault=state-leak`, …). A "buggy version" is just a version whose deployment config sets a fault flag. Java jobs also support `--on-deser-error=fail|dlq`, which gives Scenario 2 a realistic fix.
+All Java jobs come from **one jar** with a `--job=<name>` entry point and **fault flags** (`--fault=npe-on-null-field`, `--fault=state-leak`, …). A "buggy version" is just a version whose deployment config sets a fault flag. Java jobs also support `--on-deser-error=fail|dlq`, which gives Scenario 2 a realistic fix. `--state-backend=rocksdb` runs a Java job with its state in RocksDB on local disk instead of on the heap: Scenario 3's temporary relief for F4.
 
 SQL jobs are submitted as SQL scripts through the SQL Gateway REST API.
 
-All jobs read Kafka topics and write Iceberg tables through the `lake` catalog. Table names are `<tenant>.<table>`, with the tenant written in snake_case (e.g. `payments_eng.payments_enriched`).
+All jobs read Kafka topics and write Iceberg tables through the `lake` catalog. Table names are `<tenant>.<table>`, with the tenant written in snake_case (e.g. `payments_eng.payments_enriched`). Each commit (one per checkpoint) writes a new metadata file, and Iceberg keeps them all by default, so every deploy also sets each table to keep its last 10 (`write.metadata.delete-after-commit.enabled`). Without it the local warehouse grew to about 120 GB of metadata over a few days of runs, against well under 1 GB of data.
 
 | Job | Input topic | Iceberg table |
 |---|---|---|
@@ -326,7 +326,7 @@ The same Postgres instance hosts the `mattermost`, `tickets` and (locally) `iceb
 | F1 | Bad deploy: NPE on a field that is sometimes null | cicd-sim deploys `payments-enrichment` v(n+1) with `--fault=npe-on-null-field` | Exception storm, restart loop, checkpoints stop | Code regression from the deploy N minutes ago; the previous version was healthy for days | Roll back to v(n) from the last good checkpoint; ticket to the owner for a code fix | **Auto** (Scenario 3) |
 | F2 | Poison records upstream | Fault injector sends malformed records to `trade-events`; a benign deploy of `trade-events-ingest` happened 11 minutes earlier | Deserialization exceptions, restart loop | **Not** the deploy: exceptions start at the first malformed offset, the deploy's change summary doesn't touch parsing, and the bad records come from one producer | Redeploy the same version with `--on-deser-error=dlq`; ticket to the upstream producer team | **Human-approved** (Scenario 2) |
 | F3 | Traffic spike → backpressure | Fault injector raises `market-data` volume about 9×. A 5 ms reference-data lookup per record caps the job at about 200 records/s per subtask, so parallelism 2 falls behind and 3 or more catches up | Backpressure, rising checkpoint duration, growing lag; no errors | Under-provisioned for the load; no code or data problem | Rescale parallelism 2→4 (within policy bounds); verify lag drains | **Auto** (Scenario 3) |
-| F4 | Unbounded state growth | `positions-aggregator` version with `--fault=state-leak` (no state TTL), deployed early in the timeline | Checkpoint size grows steadily and durations grow; eventually TaskManager memory pressure | Needs a code change (state TTL); a restart only buys time | Escalate to the owner with evidence; offer a temporary mitigation (restart with more memory) as a button | **Escalate** (Scenario 3) |
+| F4 | Unbounded state growth | `positions-aggregator` version with `--fault=state-leak` (no state TTL), deployed early in the timeline | Checkpoint size grows steadily and durations grow; eventually TaskManager memory pressure | Needs a code change (state TTL); a restart only buys time | Escalate to the owner with evidence; offer a temporary mitigation (a restart with the state on disk, in RocksDB) as a button | **Escalate** (Scenario 3) |
 | F5 | Schema drift breaks the job | Input changes a type (`ts` becomes a string) | Deserialization failures, restart loop | Upstream schema change incompatible with the table | Escalate to the owner and upstream team | **Escalate** (stretch goal) |
 
 ### 7.2 Fleet noise and hidden true positives (simulated)
@@ -420,7 +420,27 @@ On the timeline:
 
 - **F1:** auto-rollback, with the ticket opened and resolved within about 2 minutes, while the room watches.
 - **F3:** auto-rescale; lag drains in Grafana.
-- **F4:** the agent decides it can't fix this safely. It escalates with evidence, and the card offers **Acknowledge** and **Restart with more memory (temporary)** buttons. This is the "human only when necessary" moment.
+- **F4:** the agent decides it can't fix this safely. It escalates with evidence, and the card offers **Acknowledge** and **Restart with state on disk (temporary)** buttons. This is the "human only when necessary" moment.
+
+How the agent works:
+
+- **Incidents.** Each raised signal opens an incident under the signal's incident ID: a card in `#platform-incidents` (tagging the owning team as FYI) and a ticket (`correlation_id` = the incident ID, so the ticket's card lands in the incident's thread). A later raised signal for a job whose incident is in progress, or ended less than `followup` (30 min) ago, becomes a work note on that incident instead of a second incident.
+- **Notes.** Every step adds a work note to the ticket, which the chatops-bot echoes into the thread, and updates the incident card's status (Investigating, Remediating, Verifying, Resolved or Escalated). Notes are code templates over the facts and Jev's answers.
+- **Gather.** The decision's state starts from the evidence triage gathered for the signal (its `judgment.state`, without triage's own policy and history), plus: `remediation_policy` (what each fix can and can't fix, `context` in `operator.yaml`); the job's health over the last 5 minutes (`now`); the latest deploy and how soon after it the job first failed; how long the previous version ran without failing; and the job's parallelism, the tenant's maximum and the cluster's free slots.
+- **Decide.** One Jev `choice`, `remediation`, over the six options, each with criteria for when it applies.
+- **Guardrails.** Code allows the pick only if every check passes: Jev's probability ≥ 0.5; the platform's pipeline deploys the job (cicd-sim's catalogue: the simulated fleet's jobs are escalated); triage's failure class is one the action is allowed for, with probability ≥ 0.5; the job's tier is allowed; and the job has had no automatic action in the last hour. Then per action:
+  - **rollback:** code regressions, any tier. The deploy is under 2 hours old, the job first failed within 5 minutes of it (F2's poison records arrived 11 minutes after its deploy, so F2 is never rolled back), and the previous version ran at least 10 minutes without failing. A production platform would ask for a day; the demo's versions have only run since the reset.
+  - **restart from checkpoint:** platform-infrastructure or unknown problems, tiers 2 and 3. It redeploys the running version through cicd-sim.
+  - **scale up:** resource saturation, any tier. Parallelism doubles, within the tenant's maximum and the free slots.
+  
+  A pick that fails a check, or an escalation Jev picks itself, goes to the owning team, or to the platform team for platform-infrastructure problems. `observe` waits 3 minutes and decides again, at most twice. The table is `guardrails` in `agents/operator/operator.yaml`.
+- **Act.** A rollback or restart goes through cicd-sim with the action's ID, so the deployment and its outcome are tied to the incident. A scale-up sets the job's resource requirements through the Flink REST API (`PUT /jobs/:jid/resource-requirements`); the adaptive scheduler restarts it from its latest checkpoint at the new parallelism, and the agent waits until it runs at it.
+- **Verify.** After a settle window (90 s for a rollback, 2 min for a restart, 3 min for a scale-up), Jev answers `recovered`, a noul over the job's health before the action and since: status, failures, checkpoints, lag and its trend, backpressure. At ≥ 0.6 the incident closes; otherwise it checks again every minute, and escalates 6 minutes after the action.
+- **Close.** The ticket is resolved with templated close notes; after a rollback they ask the owner to fix the bad version before deploying it again.
+- **Escalate.** The ticket is assigned to the team with the evidence and what the fix needs (for state growth, the growth rate and a state TTL). An approval card in the thread offers **Acknowledge**, and for a Java job whose state keeps growing, **Restart with state on disk (temporary)**: a redeploy of the same version with `--state-backend=rocksdb`, which moves the job's state from the JVM heap to RocksDB on local disk. It relieves memory pressure without fixing the growth. A click is recorded by the chatops-bot in `platform.actions`; the agent consumes it and carries it out.
+- **Errors.** A Jev request that fails is retried up to three times. A step that still fails (cicd-sim or Jev unreachable, say) escalates the incident to the platform team, so no incident is left half done.
+- **Audit.** `platform.actions` records the ticket being opened, Jev's pick (`proposed`, with its probabilities), the guardrails' verdict (`approved` or `rejected` by `operator:guardrails`, with each check), the execution (by cicd-sim or the agent), the verification (`verified` or `failed`) and the escalation. The per-job budget counts the guardrails' approvals.
+- **Tuning.** `operator decide --from … --to …` re-decides a past window's raised signals from the ops DB and prints Jev's pick and the guardrails' verdict, without acting. `make operator-test` runs the whole timeline and checks the outcome.
 
 ## 9. Human interfaces
 
@@ -466,7 +486,7 @@ compose.aws.yml             # override (S3 + Glue, bigger heaps)
 Cargo.toml                  # Rust workspace
 crates/
   platform-model/           # shared event types; schemas/ holds the generated JSON Schemas
-  platform-clients/         # Flink REST, Prometheus, ops DB (+ migrations), tickets, chatops clients
+  platform-clients/         # Flink REST, cicd-sim, Prometheus, ops DB (+ migrations), tickets, chatops clients
 services/
   Dockerfile                # one image for every service; the command picks the binary
   collector/                # Flink REST poller, Alertmanager webhook, log intake, Kafka→Postgres
@@ -503,14 +523,14 @@ To save memory and build time, the Rust services ship as one image (`platform/se
 The `director` CLI (Rust, `director/`) runs on the host beside `docker compose`, through `scripts/director.sh` (`make reset`, `make run SCENARIO=…`, `make status`). Locally it runs with cargo. On EC2, `scripts/aws.sh director …` runs it from the services image in a container, with the host's Docker CLI, Compose plugin and socket: the image is built against a newer glibc than Amazon Linux's, so the binary can't run on the host itself.
 
 - `reset` returns the platform to a known starting point, in about two minutes:
-  1. Stop the fault injectors, the input data, the fleet, the fleet-exporter and the triage agent.
-  2. Cancel every Flink job, then move each real job's consumer group (named after the job), and the triage agent's, to the latest offsets. Each run then starts with no backlog and no leftover fault records or alerts, and the jobs start from fresh state.
+  1. Stop the fault injectors, the input data, the fleet, the fleet-exporter and the triage and operator agents.
+  2. Cancel every Flink job, then move each real job's consumer group (named after the job), and the agents' (`triage`, `operator`), to the latest offsets. Each run then starts with no backlog and no leftover fault records or alerts, and the jobs start from fresh state.
   3. Truncate the ops DB's history tables (not the `jobs` registry) and the tickets, which restarts the `INC` numbers.
   4. Delete Prometheus's Flink series (its admin API is on, bound to localhost), and recreate Prometheus and Alertmanager, so no alert carries over. Alertmanager's notification log is in memory: kept in a volume, it would treat an alert that was firing before the reset as already notified when it fired again.
   5. Archive and re-create the Mattermost channels (through the chatops-bot).
   6. Restart the fleet-exporter, `st-fleet` and `st-inputs` with the timeline's seeds, which restarts the fleet's seeded problems.
   7. Deploy every job's baseline version.
-  8. Start the triage agent, with no open incidents.
+  8. Start the triage and operator agents, with no open incidents.
 - `run [--scenario 1|2|3|all]` first restarts the fleet and the input data with the timeline's seeds, so their seeded behaviour lines up with the timeline's offsets however long the reset took. It then executes the timeline (`director/timeline.yaml`): deploys through cicd-sim and fault injections at fixed offsets. One scenario on its own runs just its steps, shifted to start at once, followed by its settle time. Scenario 1 is the fleet's noise alone.
 - `status` shows progress through the run and the incidents so far. `incidents` lists them: for each real job, its first symptom since the run started (a failure's root cause, or a firing alert), and for each of the fleet's genuine problems, its first failure, in order. The fleet's alerts aren't incidents: the naive rules fire on simulated metrics that hover around their thresholds, so whether one crosses in a given half hour depends on scrape timing rather than the seed. `make director-test` runs two reset-and-run cycles and checks that both list the same incidents in the same order: the same jobs, and the same root cause for each failure. Alert names aren't compared, because rules about one symptom, such as backpressure and slow checkpoints, fire seconds apart in either order.
 - The director waits on wall-clock deadlines, so a laptop that sleeps mid-run runs its overdue steps on waking rather than shifting the whole timeline. Rehearse on the laptop with sleep prevented (e.g. `caffeinate -is make run`).

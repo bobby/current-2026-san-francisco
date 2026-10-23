@@ -53,6 +53,7 @@ final class PositionsAggregator {
                   fill_count BIGINT,
                   updated_at TIMESTAMP_LTZ(6)
                 )""");
+        p.retainMetadata("lake.risk_platform.positions");
 
         DataStream<Row> fills = p.parse(TOPIC, p.kafkaSource(TOPIC), PositionsAggregator::parse, FILL);
         DataStream<Row> positions = fills

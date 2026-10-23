@@ -18,6 +18,10 @@ import java.util.Set;
  *       (default {@code kafka:9092}).
  *   <li>{@code --state-leak-bytes=<n>}: bytes retained per record by the
  *       {@code state-leak} fault (default 4096).
+ *   <li>{@code --state-backend=hashmap|rocksdb}: the job's state backend,
+ *       instead of the cluster's ({@code hashmap}, on the JVM heap). RocksDB
+ *       keeps state on local disk: the operator agent's temporary relief for
+ *       a job whose state outgrows the heap (F4, docs/design.md §8.3).
  * </ul>
  */
 public record JobOptions(
@@ -25,7 +29,8 @@ public record JobOptions(
         Set<String> faults,
         DeserErrorMode onDeserError,
         String bootstrapServers,
-        int stateLeakBytes)
+        int stateLeakBytes,
+        String stateBackend)
         implements Serializable {
 
     public enum DeserErrorMode {
@@ -48,6 +53,7 @@ public record JobOptions(
         DeserErrorMode onDeserError = DeserErrorMode.FAIL;
         String bootstrapServers = "kafka:9092";
         int stateLeakBytes = 4096;
+        String stateBackend = null;
 
         for (int i = 0; i < args.length; i++) {
             String arg = args[i];
@@ -84,6 +90,12 @@ public record JobOptions(
                 case "on-deser-error" -> onDeserError = DeserErrorMode.valueOf(value.toUpperCase());
                 case "bootstrap-servers" -> bootstrapServers = value;
                 case "state-leak-bytes" -> stateLeakBytes = Integer.parseInt(value);
+                case "state-backend" -> {
+                    if (!value.equals("hashmap") && !value.equals("rocksdb")) {
+                        throw new IllegalArgumentException("Unknown state backend: " + value + " (hashmap or rocksdb)");
+                    }
+                    stateBackend = value;
+                }
                 default -> throw new IllegalArgumentException("Unknown option: --" + key);
             }
         }
@@ -91,6 +103,6 @@ public record JobOptions(
         if (job == null) {
             throw new IllegalArgumentException("--job is required");
         }
-        return new JobOptions(job, Set.copyOf(faults), onDeserError, bootstrapServers, stateLeakBytes);
+        return new JobOptions(job, Set.copyOf(faults), onDeserError, bootstrapServers, stateLeakBytes, stateBackend);
     }
 }
