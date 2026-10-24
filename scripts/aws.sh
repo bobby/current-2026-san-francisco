@@ -9,7 +9,9 @@
 #   scripts/aws.sh exec <command>     run a shell command in /opt/platform on the instance
 #   scripts/aws.sh jobs <args...>     run scripts/jobs.sh on the instance
 #   scripts/aws.sh director <args...> run the director on the instance (reset, run, status, ...)
-#   scripts/aws.sh tunnel             forward the UIs to localhost (needs session-manager-plugin)
+#   scripts/aws.sh detach <log> <cmd>  start a command on the instance in the background, logging to <log>
+#   scripts/aws.sh fetch <path> [dest] copy a file from /opt/platform on the instance (via the bucket)
+#   scripts/aws.sh tunnel             forward the UIs to localhost, reconnecting (needs session-manager-plugin)
 #   scripts/aws.sh shell              open a shell on the instance
 #   scripts/aws.sh stop|start         stop or start the instance (data is kept)
 #   scripts/aws.sh teardown           delete the stack, its data and the secrets
@@ -43,7 +45,7 @@ BUNDLE=(
   observability postgres
   shadowtraffic/inputs.json shadowtraffic/fleet.json shadowtraffic/fleet/roster-cloud.json shadowtraffic/faults
   director/timeline.yaml agents/triage/triage.yaml agents/triage/known-noise.yaml agents/operator/operator.yaml
-  scripts docs/flink-metrics.md
+  scripts docs/flink-metrics.md recordings
 )
 
 die() { echo "error: $*" >&2; exit 1; }
@@ -187,18 +189,46 @@ EOF
 )"
 }
 
+# forward <instance> <port>: forwards one port, and reconnects whenever the
+# session ends (Session Manager drops idle or long sessions; Wi-Fi blips).
+forward() {
+  local session=""
+  # The CLI leaves its session-manager-plugin child behind if killed alone.
+  trap 'pkill -P "$session" 2>/dev/null; kill "$session" 2>/dev/null; exit 0' INT TERM
+  while :; do
+    aws ssm start-session --target "$1" --document-name AWS-StartPortForwardingSession \
+      --parameters "portNumber=$2,localPortNumber=$2" >/dev/null 2>&1 &
+    session=$!
+    wait "$session" || true
+    echo "$(date +%H:%M:%S) tunnel on :$2 dropped; reconnecting" >&2
+    sleep 2
+  done
+}
+
 tunnel() {
   command -v session-manager-plugin >/dev/null ||
     die "install the Session Manager plugin first: brew install --cask session-manager-plugin"
   local id port
   id=$(instance_id)
-  trap 'kill $(jobs -p) 2>/dev/null' EXIT
+  trap 'kill $(jobs -p) 2>/dev/null' EXIT INT TERM
   for port in "${TUNNEL_PORTS[@]}"; do
-    aws ssm start-session --target "$id" --document-name AWS-StartPortForwardingSession \
-      --parameters "portNumber=$port,localPortNumber=$port" >/dev/null &
+    forward "$id" "$port" &
   done
-  echo "Forwarding localhost ports ${TUNNEL_PORTS[*]} to $id. Ctrl-C to stop."
+  echo "Forwarding localhost ports ${TUNNEL_PORTS[*]} to $id, reconnecting if one drops. Ctrl-C to stop."
   wait
+}
+
+# fetch <path> [dest]: copies a file under /opt/platform on the instance to
+# the laptop (by default to the same relative path), through the bucket.
+fetch() {
+  local path=$1 dest=${2:-$1} bucket key
+  bucket=$(output BucketName)
+  key=fetch/$(date -u +%Y%m%dT%H%M%SZ)-$(basename "$path")
+  remote "cd $REMOTE_DIR && aws s3 cp --quiet $(printf '%q' "$path") s3://$bucket/$key" >/dev/null
+  mkdir -p "$(dirname "$dest")"
+  aws s3 cp --quiet "s3://$bucket/$key" "$dest"
+  aws s3 rm --quiet "s3://$bucket/$key"
+  echo "fetched $path to $dest"
 }
 
 teardown() {
@@ -237,6 +267,19 @@ case "${1:-}" in
     shift
     remote "cd $REMOTE_DIR && scripts/director.sh $(printf '%q ' "$@")"
     ;;
+  detach)
+    shift
+    (($# >= 2)) || die "usage: $0 detach <log under $REMOTE_DIR> <command...>"
+    log=$1
+    shift
+    remote "cd $REMOTE_DIR && mkdir -p \$(dirname $(printf '%q' "$log")) &&
+      { setsid nohup $(printf '%q ' "$@") >$(printf '%q' "$log") 2>&1 </dev/null & } && sleep 3 && tail -5 $(printf '%q' "$log")"
+    ;;
+  fetch)
+    shift
+    (($#)) || die "usage: $0 fetch <path under $REMOTE_DIR> [dest]"
+    fetch "$@"
+    ;;
   tunnel) tunnel ;;
   shell) aws ssm start-session --target "$(instance_id)" ;;
   stop) aws ec2 stop-instances --instance-ids "$(instance_id)" --query 'StoppingInstances[0].CurrentState.Name' --output text ;;
@@ -247,7 +290,7 @@ case "${1:-}" in
     ;;
   teardown) teardown ;;
   *)
-    sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
     exit 1
     ;;
 esac

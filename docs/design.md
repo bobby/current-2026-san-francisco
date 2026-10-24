@@ -380,7 +380,7 @@ How the agent works:
 
 - **Grouping.** A job's first firing alert opens a group, and the group is judged `group_window` (45 s) later with every alert for the job that arrived meanwhile, so a storm of rules about one problem is one judgment. A job's groups are judged one at a time, in order.
 - **Settling.** A job that failed less than `settle` (2 min) before its group is due is judged once it has recovered, meaning RUNNING for `recovery` (60 s) without failing again, or at the 2-minute cap if it hasn't. A transient restart is judged after the fact. A job that failed three times or more in that time is in a restart loop and is judged at once.
-- **Rechecks.** Alertmanager reports an alert once, when it starts firing, so a slowly worsening problem (state growth, a stalled consumer) may look harmless when first judged. When a job's latest verdict was `suppress` and its alerts are still firing, it is judged again after `recheck` (5 min), then 10, 20 and so on, until the alerts resolve or it's raised. A new alert for the job starts the backoff over. A judgment that fails (Jev's API timing out, say) is retried up to three times.
+- **Rechecks.** Alertmanager reports an alert once, when it starts firing, so a slowly worsening problem (state growth, a stalled consumer) may look harmless when first judged. When a job's latest verdict was `suppress` and its alerts are still firing, it is judged again after `recheck` (2 min), then 4, 8 and so on, until the alerts resolve or it's raised. The timing runs (#12) settled on 2 minutes: F3's backlog first scores just under the raise threshold, and with 5-minute rechecks it was raised only two minutes before its spike ended; replaying the same run with 2-minute rechecks raised it three minutes sooner and no extra noise. A new alert for the job starts the backoff over. A judgment that fails (Jev's API timing out, say) is retried up to three times.
 - **Evidence.** It is computed in code, as of the judgment's time and relative to it: the job's identity and tier; the alerts in the group; the job's alert history; status, failures grouped by root cause and whether it recovered; the most frequent log warnings; checkpoint counts, durations (the last 5 minutes' median and slowest against earlier) and state growth; lag, backpressure, and input rate and its ratio to 15 minutes earlier, from Prometheus; deployments in the last 2 hours (without their job arguments, which carry the fault flags); the job's earlier verdicts; and the open incidents for the job or its tenant.
 - **Platform context.** Every state starts with `triage_policy`: what this platform's alerts usually mean, as an on-call engineer would know it. It lists the patterns that are usually noise and those that need action (`context` in `triage.yaml`). The `actionable` question refers to it, and its yes and no criteria are spelled out with `what`, `not_for` and examples. On a recorded run, this context lowered the noise's scores by 0.1–0.15 and removed both false raises, with the same eight real problems raised. Splitting `actionable` into narrower questions combined in code ("still failing", "worsening", "a one-off") separated worse, so it isn't used.
 - **Known noise.** The "known noisy" jobs of §7.2 come with the platform team's note: what the expected symptom looks like, and who triaged it when (`agents/triage/known-noise.yaml`, generated with the fleet). Jev compares the note with the evidence, so a known-noisy job with a different problem still stands out.
@@ -557,28 +557,43 @@ The full timeline takes 30 minutes:
 | 15:00 | 3 | Deploy `payments-enrichment` 1.42.0: F1 |
 | 18:00 | 3 | Inject F3: the `market-data` spike, for 10 minutes |
 
-These offsets are a starting point for the timing runs in #12.
+The timing runs of #12 kept these offsets and changed triage's recheck instead (§8.1): F3 is now raised 22–24 minutes in, with time to verify the rescale before its spike ends. [runbook.md](runbook.md) §5.2 has the run clock.
+
+### 10.3 Rehearsal, recording and replay
+
+The hedges of D14, built once the scenarios worked. The operating procedure is [runbook.md](runbook.md).
+
+- **Preflight** (`scripts/preflight.sh`, `make preflight[-aws]`): a go/no-go in about 30 seconds that changes nothing. Every container healthy; Flink's TaskManagers and free slots; the director reset and the catalogue jobs running; the agents enabled; Jev reachable and Claude's key accepted (listing models, so no tokens are spent); the fleet reporting; Mattermost's channels; Grafana; disk and memory headroom; a recording on hand. `--tunnel` checks the UIs forwarded from EC2 instead.
+- **Rehearsal** (`scripts/rehearsal.sh`, `make rehearsal[-aws]`): preflight, a reset, and the whole timeline as on stage, with Scenario 2's engineer played by `assistant-test.sh --in-run` (it asks in the F2 signal's thread and clicks Approve). Then the triage and operator checks on the same run (the operator's clicks F4's temporary restart), the timings of what the audience sees, each container's peak memory (sampled every 30 s), and a recording. It passes only if nothing needed a hand. On EC2 it runs detached on the instance.
+- **Recording** (`director record`): the chatops-bot keeps a transcript of every post and edit in the platform channels since the last reset, from Mattermost's WebSocket (`GET /admin/transcript`), so it has the human posts and the clicks' card updates too. A recording is that transcript for the run's window; the rows Grafana and the tickets UI read (`alerts`, `signals`, `deployments` and `actions` for the counters and annotations; `incident`, `journal`), with their `timestamptz` columns; and the four starring jobs' series behind Grafana's per-job panels, from Prometheus every 5 s. It is one gzipped JSON file in `recordings/`, about a megabyte.
+- **Replay** (`director replay start <recording> [--from 12m] [--speed 2]`): quiets the platform (fault injectors, generators, fleet relay, agents and Alertmanager stopped, Flink jobs cancelled, Flink series forgotten, history and tickets emptied, channels archived), stages the file in `.director/` and starts the `replay` Compose service (profile `replay`), which runs `director play`. The player follows a clock over the recording that `replay pause|resume|seek` move through its control API on `:8096`:
+  - posts and edits go back through the chatops-bot (`POST /admin/replay/posts`, `PUT /admin/replay/posts/{id}`) as their authors, with recorded post IDs mapped to the new ones so replies land in their threads. The bot marks them `replayed`, so a replayed mention of `@ops-assistant` starts no conversation, and gives their buttons an integration that only acknowledges a click (Mattermost strips the recorded ones);
+  - rows are inserted as the clock reaches them, with every timestamp moved by the same amount, so Grafana's counters move as they did;
+  - the metrics are served on `:9249` as they were at the clock's moment, and Prometheus's `replay` job scrapes them.
+
+  Starting partway, or seeking forward, applies everything before at once, except firehose posts more than two minutes old. It needs no network: no AWS, Jev, Anthropic or ShadowTraffic. `director reset` stops it and goes live again.
+- **Tunnel**: each forwarded port reconnects by itself when its Session Manager session ends.
 
 ## 11. Resource budget
 
-These are estimates to check against real usage.
+These were estimates; the last column is the peak each used in the #12 rehearsals ([runbook.md](runbook.md) §9.3), sampled every 30 s.
 
-| Component | Laptop (dev) | EC2 (demo) |
-|---|---|---|
-| Kafka (KRaft, 1 broker) | 1 GB | 1.5 GB |
-| Flink JM + SQL Gateway | 1.5 GB | 2 GB |
-| Flink TaskManagers | 1 × 3 GB | 2 × 4 GB |
-| ShadowTraffic (inputs + fleet + one fault) | 2 GB | 3 GB |
-| Postgres | 0.5 GB | 1 GB |
-| Mattermost | 0.75 GB | 1 GB |
-| Prometheus + Alertmanager + Grafana (0.5 GB of it) | 1 GB | 1.5 GB |
-| Vector | 0.1 GB | 0.1 GB |
-| Rust services + agents | 0.3 GB | 0.3 GB |
-| Claude Code (Node) | 0.5 GB | 0.5 GB |
-| RustFS + Iceberg REST catalog | 0.75 GB | — |
-| **Total** | **≈ 11.5 GB** | **≈ 19 GB** of 32 GB |
+| Component | Laptop (dev) | EC2 (demo) | Used: laptop / EC2 |
+|---|---|---|---|
+| Kafka (KRaft, 1 broker) | 1 GB | 1.5 GB | 0.5 GB / 1.2 GB |
+| Flink JM + SQL Gateway | 1.5 GB | 2 GB | 1.3 GB / 1.8 GB |
+| Flink TaskManagers | 1 × 3 GB | 2 × 4 GB | 2.5 GB / 3.1 + 1.0 GB |
+| ShadowTraffic (inputs + fleet + one fault) | 2 GB | 3 GB | 1.1 GB / 1.4 GB |
+| Postgres | 0.5 GB | 1 GB | 0.1 GB / 0.2 GB |
+| Mattermost | 0.75 GB | 1 GB | 0.1 GB / 0.2 GB |
+| Prometheus + Alertmanager + Grafana (0.5 GB of it) | 1 GB | 1.5 GB | 0.5 GB / 1.0 GB |
+| Vector | 0.1 GB | 0.1 GB | under 0.1 GB |
+| Rust services + agents | 0.3 GB | 0.3 GB | 0.1 GB |
+| Claude Code (Node) | 0.5 GB | 0.5 GB | 0.1 GB (in the chatops-bot) |
+| RustFS + Iceberg REST catalog | 0.75 GB | — | 1.4 GB (RustFS at its 1 GB limit) / — |
+| **Total** | **≈ 11.5 GB** | **≈ 19 GB** of 32 GB | **6.8 GB** of Docker's 9 GB / **9.8 GB** of 32 GB |
 
-On the laptop the fleet can be scaled down (e.g. about 200 simulated jobs) during development.
+On the laptop the fleet can be scaled down (e.g. about 200 simulated jobs) during development. Both runtimes have headroom; the one container that reached its limit is RustFS, at 1 GB in the laptop rehearsal, which still passed. Raise it if the laptop ever runs the live demo.
 
 ## 12. Milestones
 
@@ -592,7 +607,7 @@ Progress is tracked in [GitHub Issues](https://github.com/bobby/current-2026-san
 6. **Scenario 1:** the triage agent and Jev question tuning.
 7. **Scenario 3:** the operator agent, guardrails, verification.
 8. **Scenario 2:** the MCP server and the Claude Code bridge.
-9. **Hedges:** a recorded replay fallback, a rehearsal checklist, and timing on the laptop vs. EC2.
+9. **Hedges:** a recorded replay fallback, a rehearsal checklist, and timing on the laptop vs. EC2 (§10.3, [runbook.md](runbook.md)).
 
 ## 13. Open questions
 

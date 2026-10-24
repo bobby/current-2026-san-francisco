@@ -10,8 +10,10 @@ publish.workspace = true
 [dependencies]
 platform-clients.workspace = true
 anyhow.workspace = true
+axum.workspace = true
 chrono.workspace = true
 clap.workspace = true
+flate2.workspace = true
 humantime.workspace = true
 reqwest.workspace = true
 serde.workspace = true

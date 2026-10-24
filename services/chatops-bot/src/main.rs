@@ -19,6 +19,11 @@
 //!   approval card whose **Approve** the bot carries out (`remediation`).
 //! - `POST /admin/reset-channels` archives and re-creates the channels (the
 //!   director's reset).
+//! - It keeps a transcript of every post and edit in the platform channels
+//!   since the last reset (`GET /admin/transcript`), which `director record`
+//!   saves with a run. `director replay` posts it again through
+//!   `POST /admin/replay/posts` and `PUT /admin/replay/posts/{post_id}`
+//!   (docs/design.md §10.3).
 
 mod assistant;
 mod bot;
@@ -41,7 +46,7 @@ use bot::{ActionRequest, Chatops};
 use clap::Parser;
 use futures_util::StreamExt;
 use platform_clients::{
-    chatops::{PostRequest, ProposalRequest},
+    chatops::{PostRequest, ProposalRequest, ReplayEdit, ReplayPost},
     cicd::CicdClient,
     flink::FlinkClient,
     kafka::Publisher,
@@ -166,6 +171,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/actions", post(action))
         .route("/hooks/tickets", post(ticket_hook))
         .route("/admin/reset-channels", post(reset_channels))
+        .route("/admin/transcript", get(transcript))
+        .route("/admin/replay/posts", post(replay_post))
+        .route("/admin/replay/posts/{post_id}", put(replay_edit))
         .with_state(chatops.clone());
     let listener = tokio::net::TcpListener::bind(config.listen_addr).await?;
     info!(addr = %config.listen_addr, "chatops-bot listening");
@@ -214,7 +222,16 @@ async fn propose(State(chatops): AppState, Json(request): Json<ProposalRequest>)
     }
 }
 
-async fn action(State(chatops): AppState, Json(request): Json<ActionRequest>) -> Response {
+async fn action(State(chatops): AppState, Json(request): Json<serde_json::Value>) -> Response {
+    // A replayed card's buttons change nothing; the recording shows what
+    // the click did.
+    if bot::is_replayed_click(&request) {
+        return Json(json!({})).into_response();
+    }
+    let request: ActionRequest = match serde_json::from_value(request) {
+        Ok(request) => request,
+        Err(err) => return error(StatusCode::UNPROCESSABLE_ENTITY, err.into()),
+    };
     let (action_id, phase) = (request.context.action_id, request.context.button.phase);
     match chatops.on_action(request).await {
         Ok((body, user)) => {
@@ -244,6 +261,28 @@ async fn ticket_hook(State(chatops): AppState, Json(notification): Json<TicketNo
 async fn reset_channels(State(chatops): AppState) -> Response {
     match chatops.reset().await {
         Ok(()) => Json(json!({"reset": true})).into_response(),
+        Err(err) => error(StatusCode::BAD_GATEWAY, err),
+    }
+}
+
+async fn transcript(State(chatops): AppState) -> Response {
+    Json(chatops.transcript().await).into_response()
+}
+
+async fn replay_post(State(chatops): AppState, Json(request): Json<ReplayPost>) -> Response {
+    match chatops.replay_post(&request).await {
+        Ok(response) => Json(response).into_response(),
+        Err(err) => error(StatusCode::BAD_GATEWAY, err),
+    }
+}
+
+async fn replay_edit(
+    State(chatops): AppState,
+    Path(post_id): Path<String>,
+    Json(request): Json<ReplayEdit>,
+) -> Response {
+    match chatops.replay_edit(&post_id, &request).await {
+        Ok(response) => Json(response).into_response(),
         Err(err) => error(StatusCode::BAD_GATEWAY, err),
     }
 }
@@ -284,7 +323,8 @@ async fn firehose(bootstrap_servers: String, chatops: Arc<Chatops>) -> anyhow::R
 }
 
 /// Follows Mattermost's WebSocket as the admin, who is in every platform
-/// channel, and hands new posts to the bot. Reconnects (logging in again)
+/// channel: records every post and edit in the transcript, and hands new
+/// posts to the bot. Reconnects (logging in again)
 /// when the connection drops.
 async fn events(chatops: Arc<Chatops>) -> anyhow::Result<()> {
     loop {
@@ -307,12 +347,20 @@ async fn listen(chatops: &Arc<Chatops>) -> anyhow::Result<()> {
     while let Some(message) = stream.next().await {
         let tungstenite::Message::Text(text) = message? else { continue };
         let Ok(event) = serde_json::from_str::<serde_json::Value>(&text) else { continue };
-        if event["event"] != "posted" {
+        let edit = match event["event"].as_str() {
+            Some("posted") => false,
+            Some("post_edited") => true,
+            _ => continue,
+        };
+        let Some(post) = event["data"]["post"].as_str().and_then(|p| serde_json::from_str::<mattermost::Post>(p).ok())
+        else {
             continue;
+        };
+        chatops.record(&post, edit).await;
+        if !edit {
+            let chatops = chatops.clone();
+            tokio::spawn(async move { chatops.on_posted(post).await });
         }
-        let Some(post) = event["data"]["post"].as_str().and_then(|p| serde_json::from_str(p).ok()) else { continue };
-        let chatops = chatops.clone();
-        tokio::spawn(async move { chatops.on_posted(post).await });
     }
     anyhow::bail!("the WebSocket closed")
 }

@@ -46,6 +46,9 @@ make assistant-test  # Scenario 2: ask @ops-assistant about F2, approve its fix 
 make reset        # return the platform to its starting state (~2 min)
 make run          # run the scripted demo timeline (SCENARIO=1|2|3|all; all takes 30 min)
 make status       # progress through the run, and the incidents so far
+make preflight    # demo-day go/no-go: healthy, reset, models reachable (~30 s)
+make rehearsal    # full dress rehearsal: run, check every scenario, time it, record it (~45 min)
+make replay       # the fallback: play a recorded run back, with no agents, models or network
 make rust-test    # Rust unit tests and ops DB tests (needs a Rust toolchain)
 make down         # stop (keep data); `make clean` also deletes volumes
 ```
@@ -86,6 +89,8 @@ make teardown-aws     # delete everything: stack, bucket contents, images, secre
 ```
 
 `scripts/aws.sh` has more subcommands: `exec <command>`, `jobs <args>` and `director <args>` (e.g. `director reset`) run on the instance over SSM Run Command, `shell` opens a session, and `stop`/`start` park the instance between rehearsals. Stop the local stack before `make tunnel`, because both use the same ports.
+
+For the talk itself, follow the demo-day runbook, [docs/runbook.md](docs/runbook.md): the happy path, minute by minute, and what to do when something goes wrong, down to replaying a recorded rehearsal with no network.
 
 ### A Real Flink Platform
 

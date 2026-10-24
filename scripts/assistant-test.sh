@@ -5,7 +5,8 @@
 # approving it through Mattermost recovers the job. Needs the stack up, and
 # JEV_API_KEY and ANTHROPIC_API_KEY in .env.
 #
-#   scripts/assistant-test.sh   reset, run Scenario 2 and converse (~25 min)
+#   scripts/assistant-test.sh            reset, run Scenario 2 and converse (~25 min)
+#   scripts/assistant-test.sh --in-run   converse in the run already going (the rehearsal's)
 #
 # Checks:
 #  1. Triage raises trade-events-ingest after the poison records arrive.
@@ -36,11 +37,13 @@ docker compose exec -T chatops-bot sh -c 'test -n "$ANTHROPIC_API_KEY"' ||
 [[ $(curl -sf localhost:8093/stats | jq -r .enabled) == true ]] ||
   fail "the triage agent isn't triaging; set JEV_API_KEY in .env and run 'make up'"
 
-scripts/director.sh reset
-scripts/director.sh run --scenario 2 > .director/assistant-test-run.log 2>&1 &
-director=$!
-trap 'kill $director 2>/dev/null || true' EXIT
-started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+director=""
+if [[ ${1:-} != --in-run ]]; then
+  scripts/director.sh reset
+  scripts/director.sh run --scenario 2 > .director/assistant-test-run.log 2>&1 &
+  director=$!
+  trap 'kill $director 2>/dev/null || true' EXIT
+fi
 
 token=$(curl -sf -i "$MM/users/login" -H 'Content-Type: application/json' \
   -d "{\"login_id\": \"$ADMIN_USER\", \"password\": \"$ADMIN_PASSWORD\"}" |
@@ -83,12 +86,13 @@ ask() {
 step "Asking @ops-assistant in the signal's thread"
 asked=$(($(date +%s) * 1000))
 answer=$(ask "@ops-assistant what's going on here? Was it the deploy?")
+answered=$(($(date +%s) - asked / 1000))
 [[ -n "$answer" ]] || fail "no answer from the assistant within 10 minutes"
 [[ $answer != ⚠️* ]] || fail "the assistant failed: $answer"
 statuses=$(mm "$MM/posts/$root/thread" | jq -r --arg a "$assistant" --argjson since "$asked" \
   '[.posts[] | select(.user_id == $a and .create_at > $since and (.message | startswith("_")))] | sort_by(.create_at) | .[].message')
 (($(grep -c . <<<"$statuses") >= 2)) || fail "fewer than two status lines: $statuses"
-pass "$(grep -c . <<<"$statuses") status lines: $(head -3 <<<"$statuses" | paste -sd ' ' -)…"
+pass "answered in ${answered}s, after $(grep -c . <<<"$statuses") status lines: $(head -3 <<<"$statuses" | paste -sd ' ' -)…"
 printf '%s\n' "$answer" | sed 's/^/      │ /'
 grep -q 'oms-apac-1' <<<"$answer" || fail "the answer doesn't name the poison records' producer (oms-apac-1)"
 pass "the answer names the producer of the malformed records, oms-apac-1"
@@ -148,5 +152,5 @@ for want in "ops-assistant proposed" "user:$ADMIN_USER approved" "cicd-sim execu
 done
 pass "platform.actions: $phases"
 
-wait $director 2>/dev/null || true
+[[ -z "$director" ]] || wait "$director" 2>/dev/null || true
 printf '\n\033[32mAssistant test passed.\033[0m\n'
