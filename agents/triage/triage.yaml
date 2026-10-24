@@ -45,7 +45,7 @@ settle: 2m
 # firing is judged again after this long, then after twice as long, and so
 # on: Alertmanager reports an alert once, and a slowly worsening problem may
 # have looked harmless the first time.
-recheck: 5m
+recheck: 2m
 # How far back the evidence looks: failures, checkpoints, alerts, deploys.
 history: 30m
 # A deployment this recent is in the evidence, and `deploy_related` is asked.

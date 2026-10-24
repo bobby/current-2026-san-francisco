@@ -6,7 +6,10 @@ use std::collections::{HashMap, HashSet};
 use anyhow::Context;
 use chrono::Utc;
 use platform_clients::{
-    chatops::{Bot, Card, Channel, PostRequest, PostResponse, ProposalRequest},
+    chatops::{
+        Bot, Card, Channel, PostRequest, PostResponse, ProposalRequest, REPLAYED, ReplayEdit, ReplayPost,
+        TranscriptEntry,
+    },
     cicd::CicdClient,
     flink::FlinkClient,
     kafka::Publisher,
@@ -55,7 +58,13 @@ pub struct Chatops {
     incident_threads: Mutex<HashMap<String, String>>,
     /// Actions already decided by a button click.
     decided: Mutex<HashSet<Uuid>>,
+    /// Every post and edit in the platform channels since the last reset.
+    transcript: Mutex<Vec<TranscriptEntry>>,
 }
+
+/// The transcript keeps at most this many entries (a run makes a few
+/// thousand), in case nobody resets for days.
+const TRANSCRIPT_LIMIT: usize = 100_000;
 
 /// A button click, as Mattermost sends it.
 #[derive(Debug, Deserialize)]
@@ -95,6 +104,7 @@ impl Chatops {
             ticket_posts: Default::default(),
             incident_threads: Default::default(),
             decided: Default::default(),
+            transcript: Default::default(),
         }
     }
 
@@ -266,10 +276,82 @@ impl Chatops {
         Ok((body, user))
     }
 
+    /// Adds a post or an edit in a platform channel to the transcript.
+    /// Replayed posts aren't part of it.
+    pub async fn record(&self, post: &Post, edit: bool) {
+        if is_replayed(post) {
+            return;
+        }
+        let (channel, user) = {
+            let ws = self.workspace.read().await;
+            let Some(channel) = Channel::ALL.into_iter().find(|c| ws.channel_id(*c) == post.channel_id) else {
+                return;
+            };
+            let user = ws.bots.iter().find(|(_, b)| b.user_id == post.user_id).map(|(bot, _)| bot.username());
+            let user = match user {
+                Some(bot) => bot.to_string(),
+                None if post.user_id == ws.admin_id => self.admin.username.clone(),
+                None => post.user_id.clone(),
+            };
+            (channel, user)
+        };
+        let entry = TranscriptEntry {
+            ts: Utc::now(),
+            edit,
+            post_id: post.id.clone(),
+            root_id: Some(post.root_id.clone()).filter(|r| !r.is_empty()),
+            channel,
+            user,
+            message: post.message.clone(),
+            props: post.props.clone(),
+        };
+        let mut transcript = self.transcript.lock().await;
+        if transcript.len() >= TRANSCRIPT_LIMIT {
+            transcript.drain(..TRANSCRIPT_LIMIT / 10);
+        }
+        transcript.push(entry);
+    }
+
+    pub async fn transcript(&self) -> Vec<TranscriptEntry> {
+        self.transcript.lock().await.clone()
+    }
+
+    /// Posts a recorded post again, as its author: a bot, or the on-call
+    /// engineer for anyone else. It's marked as replayed, so it starts no
+    /// conversation, and its buttons only acknowledge a click.
+    pub async fn replay_post(&self, request: &ReplayPost) -> anyhow::Result<PostResponse> {
+        let (token, channel_id) = {
+            let ws = self.workspace.read().await;
+            let bot = Bot::ALL.into_iter().find(|b| b.username() == request.user);
+            let token = bot.map_or(ws.admin_token.as_str(), |b| ws.bot_token(b)).to_string();
+            (token, ws.channel_id(request.channel).to_string())
+        };
+        let post = Post {
+            channel_id: channel_id.clone(),
+            root_id: request.root_id.clone().unwrap_or_default(),
+            message: request.message.clone(),
+            props: self.replayed_props(&request.props),
+            ..Default::default()
+        };
+        let created = self.mm.create_post(&token, &post).await?;
+        Ok(PostResponse { post_id: created.id, channel_id })
+    }
+
+    /// Makes a recorded edit again, as the admin.
+    pub async fn replay_edit(&self, post_id: &str, request: &ReplayEdit) -> anyhow::Result<PostResponse> {
+        let token = self.workspace.read().await.admin_token.clone();
+        let post = self.mm.patch_post(&token, post_id, &request.message, &self.replayed_props(&request.props)).await?;
+        Ok(PostResponse { post_id: post.id, channel_id: post.channel_id })
+    }
+
+    fn replayed_props(&self, props: &Value) -> Value {
+        replayed_props_with(&self.links.callback, props)
+    }
+
     /// Answers a human's post that mentions ticket numbers with each ticket's
     /// card, in the post's thread.
     pub async fn on_posted(&self, post: Post) {
-        if post.user_id.is_empty() || self.workspace.read().await.is_bot(&post.user_id) {
+        if post.user_id.is_empty() || is_replayed(&post) || self.workspace.read().await.is_bot(&post.user_id) {
             return;
         }
         if mentions_assistant(&post.message) {
@@ -404,6 +486,7 @@ impl Chatops {
         self.incident_threads.lock().await.clear();
         self.decided.lock().await.clear();
         self.proposals.lock().await.clear();
+        self.transcript.lock().await.clear();
         if let Some(assistant) = &self.assistant {
             assistant.forget().await;
         }
@@ -427,6 +510,30 @@ fn phase_name(phase: ActionPhase) -> &'static str {
         ActionPhase::Failed => "failed",
         ActionPhase::Verified => "verified",
     }
+}
+
+/// Whether `director replay` posted it.
+fn is_replayed(post: &Post) -> bool {
+    post.props.get(REPLAYED).and_then(Value::as_bool).unwrap_or(false)
+}
+
+/// A recorded post's props, marked as replayed. Mattermost strips buttons'
+/// integrations from the posts it hands out, so a recorded card's buttons
+/// get one that only acknowledges a click (`callback` is this bot's URL).
+fn replayed_props_with(callback: &str, props: &Value) -> Value {
+    let mut props = if props.is_object() { props.clone() } else { json!({}) };
+    props[REPLAYED] = json!(true);
+    if let Some(attachments) = props.get_mut("attachments").and_then(Value::as_array_mut) {
+        for action in attachments.iter_mut().filter_map(|a| a.get_mut("actions")?.as_array_mut()).flatten() {
+            action["integration"] = json!({"url": format!("{callback}/actions"), "context": {REPLAYED: true}});
+        }
+    }
+    props
+}
+
+/// Whether a button click is on a replayed card.
+pub fn is_replayed_click(request: &Value) -> bool {
+    request["context"][REPLAYED].as_bool().unwrap_or(false)
 }
 
 /// Whether a message mentions the assistant's bot account.
@@ -468,6 +575,18 @@ pub fn ticket_numbers(message: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replayed_cards_get_inert_buttons() {
+        let props = json!({"attachments": [{"title": "t", "actions": [{"id": "button0", "name": "Approve"}]}]});
+        let replayed = super::replayed_props_with("http://chatops-bot:8092", &props);
+        assert_eq!(replayed[REPLAYED], true);
+        let action = &replayed["attachments"][0]["actions"][0];
+        assert_eq!(action["integration"]["url"], "http://chatops-bot:8092/actions");
+        assert_eq!(action["integration"]["context"][REPLAYED], true);
+        assert!(is_replayed(&Post { props: replayed, ..Default::default() }));
+        assert!(!is_replayed(&Post { props: props.clone(), ..Default::default() }));
+    }
 
     #[test]
     fn mentions_of_the_assistant() {

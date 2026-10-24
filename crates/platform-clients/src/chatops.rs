@@ -292,6 +292,46 @@ pub struct ProposalResponse {
     pub post_id: String,
 }
 
+/// A post or an edit in a platform channel, as Mattermost reported it: the
+/// bot's transcript since the last reset (`GET /admin/transcript`), which
+/// `director record` saves with a run and `director replay` plays back.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TranscriptEntry {
+    pub ts: chrono::DateTime<chrono::Utc>,
+    /// An edit replaces the post's message and props; otherwise it's new.
+    pub edit: bool,
+    pub post_id: String,
+    /// The thread's root, for a reply.
+    pub root_id: Option<String>,
+    pub channel: Channel,
+    /// The author's username: a bot's, or the on-call engineer's.
+    pub user: String,
+    pub message: String,
+    pub props: serde_json::Value,
+}
+
+/// `POST /admin/replay/posts`: a recorded post, posted again as its author.
+/// The bot marks it as replayed, so it starts no conversation, and its
+/// buttons change nothing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReplayPost {
+    pub channel: Channel,
+    pub user: String,
+    pub root_id: Option<String>,
+    pub message: String,
+    pub props: serde_json::Value,
+}
+
+/// `PUT /admin/replay/posts/{post_id}`: a recorded edit, made again.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReplayEdit {
+    pub message: String,
+    pub props: serde_json::Value,
+}
+
+/// A replayed post's props carry this key, so the bot ignores it.
+pub const REPLAYED: &str = "replayed";
+
 #[derive(Debug, Clone)]
 pub struct ChatopsClient {
     base_url: String,
@@ -346,5 +386,17 @@ impl ChatopsClient {
             card: None,
         })
         .await
+    }
+
+    pub async fn transcript(&self) -> Result<Vec<TranscriptEntry>> {
+        self.send(self.http.get(format!("{}/admin/transcript", self.base_url))).await
+    }
+
+    pub async fn replay_post(&self, post: &ReplayPost) -> Result<PostResponse> {
+        self.send(self.http.post(format!("{}/admin/replay/posts", self.base_url)).json(post)).await
+    }
+
+    pub async fn replay_edit(&self, post_id: &str, edit: &ReplayEdit) -> Result<PostResponse> {
+        self.send(self.http.put(format!("{}/admin/replay/posts/{post_id}", self.base_url)).json(edit)).await
     }
 }

@@ -89,6 +89,10 @@ services:
     image: ${SERVICES_IMAGE:?}
     build: !reset null
 
+  replay:
+    image: ${SERVICES_IMAGE:?}
+    build: !reset null
+
   mattermost:
     image: ${MATTERMOST_IMAGE:?}
     build: !reset null
