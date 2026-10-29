@@ -637,6 +637,34 @@ services:
       tickets:
         condition: service_healthy
 
+  # `director replay` (docs/design.md §10.3): plays a recorded run back into
+  # Mattermost, the ops and tickets databases and Prometheus (its `replay`
+  # job scrapes :9249), with no agents or models. `director replay start`
+  # stages the recording in .director and starts it; `make up` never does.
+  replay:
+    <<: *services
+    profiles: [replay]
+    command: [director, play, /director/replay.json.gz]
+    environment:
+      REPLAY_FROM: ${REPLAY_FROM:-0s}
+      REPLAY_SPEED: ${REPLAY_SPEED:-1}
+      CHATOPS_URL: http://chatops-bot:8092
+      DIRECTOR_OPS_DATABASE_URL: postgres://ops:${OPS_DB_PASSWORD:-ops}@postgres:5432/ops
+      DIRECTOR_TICKETS_DATABASE_URL: postgres://tickets:${TICKETS_DB_PASSWORD:-tickets}@postgres:5432/tickets
+    volumes:
+      - ./.director:/director:ro
+    ports:
+      - 127.0.0.1:8096:8096
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8096/status"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    depends_on:
+      chatops-bot:
+        condition: service_healthy
+
   # One dashboard: alerts in vs. signals out, and the starring jobs
   # annotated with deployments and actions (docs/design.md §9.3). Anyone
   # can view it without logging in.

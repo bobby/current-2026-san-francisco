@@ -24,3 +24,9 @@ scrape_configs:
         type: A
         port: 9249
         refresh_interval: 15s
+
+  # `director replay`'s recorded Flink metrics for the real jobs (docs/design.md
+  # §10.3). The target is down except during a replay.
+  - job_name: replay
+    static_configs:
+      - targets: ["replay:9249"]

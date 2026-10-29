@@ -33,6 +33,9 @@ pub struct Endpoints {
         default_value = "postgres://tickets:tickets@localhost:5432/tickets"
     )]
     pub tickets_database_url: String,
+    /// The replay's control API.
+    #[arg(long, env = "REPLAY_URL", default_value = "http://localhost:8096")]
+    pub replay_url: String,
 }
 
 /// The fault injectors, as Compose services in the `faults` profile.
@@ -98,6 +101,11 @@ impl Platform {
         let mut args = vec!["--profile", "faults", "rm", "--stop", "--force"];
         args.extend(FAULT_SERVICES);
         self.compose(&[], &args).await.map(drop)
+    }
+
+    /// Stops `director replay`'s player, if it's running.
+    pub async fn stop_replay(&self) -> anyhow::Result<()> {
+        self.compose(&[], &["--profile", "replay", "rm", "--stop", "--force", "replay"]).await.map(drop)
     }
 
     pub async fn catalogue_jobs(&self) -> anyhow::Result<Vec<String>> {
@@ -235,6 +243,12 @@ pub fn genuine_fleet_jobs(roster: &Path) -> anyhow::Result<Vec<String>> {
         .filter(|j| matches!(j["profile"].as_str(), Some("crash_loop" | "stalled" | "state_growth")))
         .filter_map(|j| j["job_name"].as_str().map(str::to_string))
         .collect())
+}
+
+/// How many jobs a roster file simulates.
+pub fn fleet_size(roster: &Path) -> anyhow::Result<usize> {
+    let jobs: Vec<Value> = serde_json::from_str(&std::fs::read_to_string(roster)?)?;
+    Ok(jobs.len())
 }
 
 /// Logs a reset step.

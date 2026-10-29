@@ -1,6 +1,8 @@
 .PHONY: up down clean ps logs smoke jobs jobs-submit jobs-cancel jobs-list jobs-test license rust-test telemetry-test cicd-test fleet-test chatops-test \
 	reset run status director-test triage-test operator-test assistant-test \
-	stack-aws secrets-aws deploy-aws jobs-submit-aws ps-aws tunnel teardown-aws
+	preflight rehearsal record replay replay-stop \
+	stack-aws secrets-aws deploy-aws jobs-submit-aws ps-aws tunnel teardown-aws \
+	preflight-aws reset-aws run-aws status-aws rehearsal-aws record-aws replay-aws
 
 MAVEN_IMAGE := maven:3.9.16-eclipse-temurin-17
 
@@ -105,6 +107,32 @@ operator-test: jobs
 assistant-test: jobs
 	./scripts/assistant-test.sh
 
+# Demo day (issue #12; docs/runbook.md). Go/no-go checks, in about 30 s.
+preflight:
+	./scripts/preflight.sh
+
+# A full dress rehearsal: the whole timeline with Scenario 2's engineer
+# played by script, every scenario's checks, timings, peak memory and a
+# recording. About 45 minutes; needs JEV_API_KEY and ANTHROPIC_API_KEY.
+rehearsal: jobs
+	./scripts/rehearsal.sh
+
+# Save the latest run to recordings/ for the replay fallback.
+record:
+	./scripts/director.sh record
+
+# The fallback: play a recording in place of the live platform, with no
+# agents or models (RECORDING=<file>, default the newest; FROM=11m starts
+# partway; SPEED=2). `make reset` goes live again.
+RECORDING ?= $(shell ls -t recordings/*.json.gz 2>/dev/null | head -1)
+FROM ?= 0s
+SPEED ?= 1
+replay:
+	./scripts/director.sh replay start "$(RECORDING)" --from $(FROM) --speed $(SPEED)
+
+replay-stop:
+	./scripts/director.sh replay stop
+
 license:
 	@test -f shadowtraffic/license.env || { \
 		echo "shadowtraffic/license.env is missing: copy shadowtraffic/license.env.example and fill in your ShadowTraffic license."; \
@@ -137,6 +165,37 @@ ps-aws:
 # local stack first, since it uses the same ports.
 tunnel:
 	./scripts/aws.sh tunnel
+
+# Demo day on EC2 (docs/runbook.md). Preflight checks the stack on the
+# instance, then the tunnel from here.
+preflight-aws:
+	./scripts/aws.sh exec scripts/preflight.sh
+	./scripts/preflight.sh --tunnel
+
+reset-aws:
+	./scripts/aws.sh director reset
+
+# Starts the run on the instance and returns; `make status-aws` follows it.
+run-aws:
+	./scripts/aws.sh detach .director/run.log scripts/director.sh run --scenario $(SCENARIO)
+
+status-aws:
+	./scripts/aws.sh director status
+
+# Starts a rehearsal on the instance (~45 min) and returns; follow it with
+# `scripts/aws.sh exec tail -30 .director/rehearsal.log`.
+rehearsal-aws:
+	./scripts/aws.sh detach .director/rehearsal.log scripts/rehearsal.sh
+
+# Records the instance's latest run and copies it to recordings/ here.
+record-aws:
+	./scripts/aws.sh exec scripts/director.sh record --out recordings/latest-aws.json.gz
+	./scripts/aws.sh fetch recordings/latest-aws.json.gz recordings/$$(date -u +%Y%m%d-%H%M)-aws.json.gz
+
+# The fallback on EC2: the newest recording on the instance (FROM, SPEED as
+# for `make replay`).
+replay-aws:
+	./scripts/aws.sh exec 'scripts/director.sh replay start "$$(ls -t recordings/*.json.gz | head -1)" --from $(FROM) --speed $(SPEED)'
 
 # Delete the stack, the bucket's contents, the images and the secrets.
 teardown-aws:
