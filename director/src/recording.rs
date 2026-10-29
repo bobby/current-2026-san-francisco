@@ -118,7 +118,7 @@ impl Recording {
         }
         let tmp = path.with_extension("tmp");
         let mut gz = flate2::write::GzEncoder::new(std::fs::File::create(&tmp)?, flate2::Compression::best());
-        gz.write_all(&serde_json::to_vec(self)?)?;
+        gz.write_all(without_account_ids(&serde_json::to_string(self)?).as_bytes())?;
         gz.finish()?;
         std::fs::rename(&tmp, path)?;
         Ok(())
@@ -148,6 +148,33 @@ impl Recording {
             self.series.len(),
         )
     }
+}
+
+/// Recordings are committed to a public repo, and on AWS the bucket that
+/// checkpoints and savepoints live in is named `<stack>-<account>-<region>`
+/// (`infra/cloudformation/demo.yaml`). This replaces the 12-digit account ID
+/// in every `s3://` bucket name with `account`.
+fn without_account_ids(json: &str) -> String {
+    let mut out = String::with_capacity(json.len());
+    let mut rest = json;
+    while let Some(at) = rest.find("s3://") {
+        let start = at + "s3://".len();
+        out.push_str(&rest[..start]);
+        let len = rest[start..]
+            .find(|c: char| !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '-'))
+            .unwrap_or(rest.len() - start);
+        let bucket = &rest[start..start + len];
+        for (i, part) in bucket.split('-').enumerate() {
+            if i > 0 {
+                out.push('-');
+            }
+            let account = part.len() == 12 && part.bytes().all(|b| b.is_ascii_digit());
+            out.push_str(if account { "account" } else { part });
+        }
+        rest = &rest[start + len..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Reads one table's rows with `time_column` in `[from, to]`.
@@ -209,4 +236,22 @@ pub async fn read_series(
         start = end;
     }
     Ok(series)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::without_account_ids;
+
+    #[test]
+    fn account_ids_leave_bucket_names() {
+        assert_eq!(
+            without_account_ids(
+                r#"{"restored_from":"s3://current2026-demo-123456789012-us-east-1/flink/savepoints/savepoint-2ac748-a403b02de890"}"#
+            ),
+            r#"{"restored_from":"s3://current2026-demo-account-us-east-1/flink/savepoints/savepoint-2ac748-a403b02de890"}"#,
+        );
+        // Local buckets, other numbers and paths outside the bucket are kept.
+        let kept = r#"["s3://flink/checkpoints/123456789012", "job 123456789012", "s3://flink-01", "s3://"]"#;
+        assert_eq!(without_account_ids(kept), kept);
+    }
 }

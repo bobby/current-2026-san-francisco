@@ -8,7 +8,7 @@ The short version:
 - **Everything is scripted.** One command starts a 30-minute timeline of deploys and faults; the agents do the rest. You do two things by hand: ask `@ops-assistant` a question and click **Approve** (Scenario 2), and optionally click F4's **Restart with state on disk** (Scenario 3).
 - **If the live demo fails, replay a recording.** `make replay` plays a recorded rehearsal back into the same Mattermost, Grafana and tickets UI, with no agents, models or network. It looks the same, so say that you're switching to a recording.
 
-Commands below run from the repo root on the laptop. `make …-aws` targets act on the EC2 instance (`AWS_PROFILE=evidentsystems`).
+Commands below run from the repo root on the laptop. `make …-aws` targets act on the EC2 instance, using `AWS_PROFILE` from your shell or `.env`.
 
 ## Contents
 
@@ -181,7 +181,7 @@ Find the symptom, then do the first thing that applies. "Replay" means §7: rung
 |---|---|---|
 | A UI tab stops loading, or Mattermost shows *Unable to connect* | The tunnel dropped for that port | Wait 5 s: `make tunnel` reconnects by itself (its tab says *dropped; reconnecting*). Then reload the tab |
 | The tunnel's tab keeps saying *dropped* | The laptop lost the internet | Switch to the phone's hotspot. If there's no internet at all: rung 3 |
-| `make …-aws` hangs or fails with an SSM error | AWS unreachable, or expired credentials | `aws sts get-caller-identity --profile evidentsystems`; re-authenticate. Meanwhile the run on EC2 carries on without you |
+| `make …-aws` hangs or fails with an SSM error | AWS unreachable, or expired credentials | `aws sts get-caller-identity` (with your `AWS_PROFILE`); re-authenticate. Meanwhile the run on EC2 carries on without you |
 | Everything is unreachable and there's no hotspot | Venue network | Rung 3: stop the tunnel (Ctrl-C), `docker compose start` (about a minute), then `make replay FROM=<clock>` |
 
 ### 6.2 The models
