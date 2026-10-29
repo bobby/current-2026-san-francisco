@@ -18,7 +18,7 @@ The whole stack is defined once in Docker Compose and runs in two places:
 
 | | Local (development and fallback) | Cloud (live demo) |
 |---|---|---|
-| Host | MacBook Pro M3, 18 GB | One EC2 Graviton instance (`m7g.2xlarge`, 32 GB) in the `evidentsystems` AWS account |
+| Host | MacBook Pro M3, 18 GB | One EC2 Graviton instance (`m7g.2xlarge`, 32 GB) in your AWS account |
 | Compose files | `compose.yml` | `compose.yml` + `compose.aws.yml` |
 | Iceberg warehouse, checkpoints, savepoints | RustFS (S3-compatible) + Iceberg REST catalog | Real S3 + AWS Glue Data Catalog |
 | Images | Built locally (arm64) | The same arm64 images, pushed to ECR |
@@ -77,7 +77,7 @@ Then open the Flink UI at http://localhost:8081, Prometheus at http://localhost:
 
 #### Running on AWS
 
-You also need the AWS CLI with the `evidentsystems` profile and the [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html) (`brew install --cask session-manager-plugin`), which `make tunnel` uses.
+You also need the AWS CLI with credentials for your account (set `AWS_PROFILE` in your shell or `.env` to pick a profile) and the [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html) (`brew install --cask session-manager-plugin`), which `make tunnel` uses.
 
 ```sh
 make stack-aws        # create or update the CloudFormation stack (~5 min the first time)

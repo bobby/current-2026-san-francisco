@@ -119,7 +119,7 @@ Settings that differ between runtimes, such as S3 endpoint and credentials, Flin
 The same Docker Compose stack runs in two places. Keep both working:
 
 - **Local (development and fallback):** `compose.yml` on a MacBook Pro M3 with 18 GB. RustFS (S3-compatible) and an Iceberg REST catalog (backed by Postgres, `iceberg-rest/Dockerfile`) stand in for S3 and Glue. The simulated fleet is reduced and there's one TaskManager. Secrets come from a local, uncommitted `.env`.
-- **Cloud (live demo):** `compose.yml` + `compose.aws.yml` on one EC2 Graviton instance (`m7g.2xlarge`, 32 GB) in the `evidentsystems` AWS account (`AWS_PROFILE=evidentsystems`). It uses real S3 and the AWS Glue Data Catalog, images from ECR, and secrets from SSM Parameter Store. Access is through SSM Session Manager port forwarding only; the instance has no inbound ports.
+- **Cloud (live demo):** `compose.yml` + `compose.aws.yml` on one EC2 Graviton instance (`m7g.2xlarge`, 32 GB) in your AWS account (`AWS_PROFILE` in the environment or `.env`; otherwise the AWS CLI's default credentials). It uses real S3 and the AWS Glue Data Catalog, images from ECR, and secrets from SSM Parameter Store. Access is through SSM Session Manager port forwarding only; the instance has no inbound ports.
 
 Rules for keeping them in step:
 

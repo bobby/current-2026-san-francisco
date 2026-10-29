@@ -16,13 +16,15 @@
 #   scripts/aws.sh stop|start         stop or start the instance (data is kept)
 #   scripts/aws.sh teardown           delete the stack, its data and the secrets
 #
-# AWS_PROFILE defaults to evidentsystems, AWS_REGION to us-east-1 and
+# AWS_PROFILE comes from the environment or the local .env; without it the AWS
+# CLI's default credentials are used. AWS_REGION defaults to us-east-1 and
 # AWS_STACK to current2026-demo.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-export AWS_PROFILE=${AWS_PROFILE:-evidentsystems}
+profile=${AWS_PROFILE:-$( (grep -E '^AWS_PROFILE=' .env 2>/dev/null || true) | tail -1 | cut -d= -f2-)}
+[[ -n "$profile" ]] && export AWS_PROFILE=$profile
 export AWS_REGION=${AWS_REGION:-us-east-1}
 STACK=${AWS_STACK:-current2026-demo}
 TEMPLATE=infra/cloudformation/demo.yaml

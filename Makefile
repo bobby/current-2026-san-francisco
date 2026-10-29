@@ -138,8 +138,8 @@ license:
 		echo "shadowtraffic/license.env is missing: copy shadowtraffic/license.env.example and fill in your ShadowTraffic license."; \
 		exit 1; }
 
-# The cloud runtime (issue #3; docs/design.md §4.5), in the evidentsystems AWS
-# account. See scripts/aws.sh for the other subcommands (exec, shell, stop,
+# The cloud runtime (issue #3; docs/design.md §4.5), in your AWS account
+# (AWS_PROFILE in the environment or .env). See scripts/aws.sh for the other subcommands (exec, shell, stop,
 # start).
 
 # Create or update the CloudFormation stack (VPC, instance, bucket, Glue, ECR).
